@@ -1,0 +1,176 @@
+// Copyright (C) 2025 Stacks Open Internet Foundation
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+use std::fs;
+
+use rand::Rng;
+
+use rusqlite::Connection;
+
+use crate::vm::storage::util::*;
+
+use clarity::vm::database::HeadersDB;
+
+use stacks_common::types::chainstate::BlockHeaderHash;
+use stacks_common::types::chainstate::BurnchainHeaderHash;
+use stacks_common::types::chainstate::ConsensusHash;
+use stacks_common::types::chainstate::StacksAddress;
+use stacks_common::types::chainstate::StacksBlockId;
+use stacks_common::types::chainstate::VRFSeed;
+use stacks_common::types::StacksEpochId;
+use stacks_common::util::hash::{Hash160, Sha512Trunc256Sum};
+
+use stacks_common::util::get_epoch_time_secs;
+
+use crate::vm::storage::M2HeadersDB;
+
+/// Boilerplate implementation so we can interface the Mach2 DB with Clarity
+impl HeadersDB for M2HeadersDB {
+    fn get_burn_header_hash_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+    ) -> Option<BurnchainHeaderHash> {
+        // mock it
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            let mut bytes = [0u8; 32];
+            bytes[0..8].copy_from_slice(&height.to_be_bytes());
+            Some(BurnchainHeaderHash(bytes))
+        } else {
+            None
+        }
+    }
+
+    fn get_consensus_hash_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<ConsensusHash> {
+        // mock it
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            let mut bytes = [0u8; 20];
+            bytes[0..8].copy_from_slice(&height.to_be_bytes());
+            Some(ConsensusHash(bytes))
+        } else {
+            None
+        }
+    }
+
+    fn get_vrf_seed_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<VRFSeed> {
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            let mut bytes = [0u8; 32];
+            bytes[0..8].copy_from_slice(&height.to_be_bytes());
+            Some(VRFSeed(bytes))
+        } else {
+            None
+        }
+    }
+
+    fn get_stacks_block_header_hash_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<BlockHeaderHash> {
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            let mut bytes = [0u8; 32];
+            bytes[0..8].copy_from_slice(&height.to_be_bytes());
+            Some(BlockHeaderHash(bytes))
+        } else {
+            None
+        }
+    }
+
+    fn get_burn_block_time_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: Option<&StacksEpochId>,
+    ) -> Option<u64> {
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            Some(height)
+        } else {
+            None
+        }
+    }
+
+    fn get_stacks_block_time_for_block(&self, id_bhh: &StacksBlockId) -> Option<u64> {
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            Some(height)
+        } else {
+            None
+        }
+    }
+
+    fn get_stacks_height_for_tenure_height(
+        &self,
+        _id_bhh: &StacksBlockId,
+        tenure_height: u32,
+    ) -> Option<u32> {
+        Some(tenure_height)
+    }
+
+    fn get_burn_block_height_for_block(&self, id_bhh: &StacksBlockId) -> Option<u32> {
+        let conn = self.conn();
+        if let Some(height) = get_m2_block_height(&conn, id_bhh) {
+            Some(height as u32)
+        } else {
+            None
+        }
+    }
+
+    fn get_miner_address(
+        &self,
+        _id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<StacksAddress> {
+        None
+    }
+
+    fn get_burnchain_tokens_spent_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<u128> {
+        // if the block is defined at all, then return a constant
+        get_m2_block_height(&self.conn(), id_bhh).map(|_| 1)
+    }
+
+    fn get_burnchain_tokens_spent_for_winning_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<u128> {
+        // if the block is defined at all, then return a constant
+        get_m2_block_height(&self.conn(), id_bhh).map(|_| 1)
+    }
+
+    fn get_tokens_earned_for_block(
+        &self,
+        id_bhh: &StacksBlockId,
+        _epoch_id: &StacksEpochId,
+    ) -> Option<u128> {
+        // if the block is defined at all, then return a constant
+        get_m2_block_height(&self.conn(), id_bhh).map(|_| 1)
+    }
+}
+
