@@ -296,7 +296,7 @@ impl NodeSession {
 pub fn run_get_info(node_addr: &SocketAddr) -> Result<RPCPeerInfoData, Error> {
     let mut sock = TcpStream::connect(node_addr)
         .map_err(Error::IO)?;
-    let bytes = run_http_request(&mut sock, node_addr, "GET", "/v2/info", None, &[])?;
+    let bytes = run_http_request(&mut sock, node_addr, "GET", "/v2/info", None, None, &[])?;
 
     let response: RPCPeerInfoData = serde_json::from_slice(&bytes)
         .map_err(|_| Error::DeserializeError("Failed to decode /v2/info response".into()))?;
@@ -317,6 +317,7 @@ pub fn run_get_sortition_info(
         node_addr,
         "GET",
         &format!("/v3/sortitions/{}/{}", key, value),
+        None,
         None,
         &[],
     )?;

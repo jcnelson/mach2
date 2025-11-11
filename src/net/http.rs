@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::io;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
+use base64ct::{Base64, Encoding};
 
 use stacks_common::codec::MAX_MESSAGE_LEN;
 use stacks_common::deps_common::httparse;
@@ -228,6 +229,7 @@ pub fn run_http_request<S: Read + Write>(
     verb: &str,
     path: &str,
     content_type: Option<&str>,
+    basic_auth: Option<(&str, &str)>,
     payload: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let content_length_hdr = if !payload.is_empty() {
@@ -236,15 +238,22 @@ pub fn run_http_request<S: Read + Write>(
         "".to_string()
     };
 
+    let auth_header = if let Some((user, password)) = basic_auth {
+        format!("Authorization: Basic {}\r\n", Base64::encode_string(format!("{}:{}", user, password).as_bytes()))
+    }
+    else {
+        "".to_string()
+    };
+
     let req_txt = if let Some(content_type) = content_type {
         format!(
-            "{} {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\nContent-Type: {}\r\n{}User-Agent: mach2/0.1\r\nAccept: */*\r\n\r\n",
-            verb, path, host, content_type, content_length_hdr
+            "{} {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\nContent-Type: {}\r\n{}User-Agent: mach2/0.1\r\nAccept: */*\r\n{}\r\n",
+            verb, path, host, content_type, content_length_hdr, auth_header
         )
     } else {
         format!(
-            "{} {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n{}User-Agent: mach2/0.1\r\nAccept: */*\r\n\r\n",
-            verb, path, host, content_length_hdr
+            "{} {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n{}User-Agent: mach2/0.1\r\nAccept: */*\r\n{}\r\n",
+            verb, path, host, content_length_hdr, auth_header
         )
     };
     m2_debug!("HTTP request\n{}", &req_txt);

@@ -21,17 +21,57 @@ use std::convert::TryFrom;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::bitcoin::BitcoinNetworkType;
+use crate::bitcoin::MagicBytes;
 use serde::Deserialize;
 use serde::Serialize;
 use toml;
+
+pub const DEFAULT_SATS_PER_VB: u64 = 50;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigBitcoin {
+    /// magic bytes to scan for
+    pub magic_bytes: MagicBytes,
+    /// mainnet, testnet, or regtest
+    pub network_id: BitcoinNetworkType,
+    /// bitcoin host 
+    pub peer_host: String,
+    /// bitcoin p2p port
+    pub peer_port: u16,
+    /// bitcoin rpc port
+    pub rpc_port: u16,
+    /// username
+    pub username: Option<String>,
+    /// password
+    pub password: Option<String>,
+    /// timeout
+    pub timeout: u64,
+    /// satoshis per byte fee
+    pub satoshis_per_byte: u64,
+    /// RBF fee increment
+    pub rbf_fee_increment: u64,
+    /// maximum RBF 
+    pub max_rbf: u64,
+    /// whether or not to sign transactions with native segwit
+    pub segwit: bool,
+    /// name of wallet to ues
+    pub wallet_name: String,
+    /// data path for bitcoin state (only needed for testing)
+    pub datadir: String,
+    /// mining key for block building (used in integration tests)
+    pub local_mining_public_key: Option<String>,
+    /// maximum number of UTXOs to create while mining (only needed for testing)
+    pub max_unspent_utxos: Option<u64>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// mainnet or testnet
     mainnet: bool,
-    /// node host
+    /// stacks node host
     node_host: String,
-    /// node port
+    /// stacks node port
     node_port: u16,
     /// identity key
     private_key: Secp256k1PrivateKey,
@@ -44,7 +84,17 @@ pub struct Config {
     storage_addr: QualifiedContractIdentifier,
     /// Path to mocked stackerdb databases
     mock_stackerdb_paths: HashMap<QualifiedContractIdentifier, String>,
-    /// Path from which we loaded this
+
+    /// bitcoin config (visible to tests)
+    #[cfg(test)]
+    pub bitcoin: ConfigBitcoin,
+    #[cfg(not(test))]
+    bitcoin: ConfigBitcoin,
+    
+    /// Path from which we loaded this (visible to tests)
+    #[cfg(test)]
+    pub __path: String,
+    #[cfg(not(test))]
     __path: String,
 }
 
@@ -54,6 +104,42 @@ pub struct ConfigFileMockStackerDB {
     contract_id: String,
     /// DB on disk
     path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConfigFileBitcoin {
+    /// mainnet, testnet, regtest
+    network_id: Option<String>,
+    /// magic bytes for OP_RETURN
+    magic_bytes: Option<String>,
+    /// bitcoin host
+    peer_host: String,
+    /// bitcoin p2p port
+    peer_port: u16,
+    /// bitcoin rpc port
+    rpc_port: u16,
+    /// bitcoin username
+    username: Option<String>,
+    /// bitcoin password
+    password: Option<String>,
+    /// connection / transport timeout, in seconds
+    timeout: u64,
+    /// satoshis per byte fee
+    satoshis_per_byte: u64,
+    /// RBF fee increment
+    rbf_fee_increment: u64,
+    /// maximum RBF 
+    max_rbf: u64,
+    /// segwit?
+    segwit: bool,
+    /// wallet name
+    wallet_name: Option<String>,
+    /// bitcoin storage dir (only needed for testing)
+    datadir: Option<String>,
+    /// mining key for controlling a bitcoin regtest node (only needed for testing)
+    local_mining_public_key: Option<String>,
+    /// maximum number of unspent UTXOs to allow (only needed for testing) 
+    max_unspent_utxos: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,6 +159,8 @@ pub struct ConfigFile {
     debug_path: Option<String>,
     /// our stackerdb contract address
     storage_addr: String,
+    /// Bitcoin config
+    bitcoin: Option<ConfigFileBitcoin>,
     /// Path to mocked stackerdb databases
     mocked_stackerdb: Option<Vec<ConfigFileMockStackerDB>>,
 }
@@ -81,6 +169,44 @@ impl ConfigFile {
     pub fn from_str(content: &str) -> Result<Self, String> {
         let config = toml::from_str(content).map_err(|e| format!("Invalid toml: {}", e))?;
         Ok(config)
+    }
+}
+
+impl TryFrom<ConfigFileBitcoin> for ConfigBitcoin {
+    type Error = String;
+    fn try_from(config_file: ConfigFileBitcoin) -> Result<Self, Self::Error> {
+        let magic_bytes = if let Some(magic_bytes_str) = config_file.magic_bytes.as_ref() {
+            MagicBytes::try_from(magic_bytes_str.as_str())?
+        }
+        else {
+            MagicBytes::default()
+        };
+
+        let network_id = if let Some(network_id_str) = config_file.network_id.as_ref() {
+            BitcoinNetworkType::try_from(network_id_str.as_str())?
+        }
+        else {
+            BitcoinNetworkType::Mainnet
+        };
+
+        Ok(Self {
+            network_id,
+            magic_bytes,
+            peer_host: config_file.peer_host,
+            peer_port: config_file.peer_port,
+            rpc_port: config_file.rpc_port,
+            username: config_file.username,
+            password: config_file.password,
+            timeout: config_file.timeout,
+            satoshis_per_byte: config_file.satoshis_per_byte,
+            rbf_fee_increment: config_file.rbf_fee_increment,
+            max_rbf: config_file.max_rbf,
+            segwit: config_file.segwit,
+            wallet_name: config_file.wallet_name.unwrap_or("".to_string()),
+            datadir: config_file.datadir.unwrap_or("/tmp/mach2-bitcoin-datadir".to_string()),
+            local_mining_public_key: config_file.local_mining_public_key,
+            max_unspent_utxos: config_file.max_unspent_utxos,
+        })
     }
 }
 
@@ -118,8 +244,32 @@ impl TryFrom<ConfigFile> for Config {
             debug_path: config_file.debug_path.unwrap_or("./debug.log".into()),
             storage_addr: default_storage,
             mock_stackerdb_paths,
+            bitcoin: config_file.bitcoin.map(|btc_cfg| btc_cfg.try_into()).unwrap_or(Ok(ConfigBitcoin::default()))?,
             __path: "".into(),
         })
+    }
+}
+
+impl From<ConfigBitcoin> for ConfigFileBitcoin {
+    fn from(config: ConfigBitcoin) -> Self {
+        Self {
+            magic_bytes: Some(config.magic_bytes.to_string()),
+            network_id: Some(config.network_id.to_string()),
+            peer_host: config.peer_host,
+            peer_port: config.peer_port,
+            rpc_port: config.rpc_port,
+            username: config.username,
+            password: config.password, 
+            timeout: config.timeout,
+            satoshis_per_byte: config.satoshis_per_byte,
+            rbf_fee_increment: config.rbf_fee_increment,
+            max_rbf: config.max_rbf,
+            segwit: config.segwit,
+            wallet_name: Some(config.wallet_name),
+            datadir: Some(config.datadir),
+            local_mining_public_key: config.local_mining_public_key,
+            max_unspent_utxos: config.max_unspent_utxos,
+        }
     }
 }
 
@@ -133,6 +283,7 @@ impl From<Config> for ConfigFile {
             storage: Some(config.storage),
             debug_path: Some(config.debug_path),
             storage_addr: config.storage_addr.to_string(),
+            bitcoin: Some(config.bitcoin.into()),
             mocked_stackerdb: Some(
                 config
                     .mock_stackerdb_paths
@@ -147,11 +298,54 @@ impl From<Config> for ConfigFile {
     }
 }
 
+impl ConfigBitcoin {
+    pub fn default() -> Self {
+        Self {
+            magic_bytes: MagicBytes::default(),
+            network_id: BitcoinNetworkType::Mainnet,
+            peer_host: "localhost".to_string(),
+            peer_port: 8333,
+            rpc_port: 8332,
+            username: None,
+            password: None,
+            timeout: 30,
+            satoshis_per_byte: DEFAULT_SATS_PER_VB, 
+            rbf_fee_increment: 0,
+            max_rbf: 0,
+            segwit: true,
+            wallet_name: "".to_string(),
+            datadir: "/tmp/mach2-bitcoin-datadir".to_string(),
+            // this is "0b6945219066768aaafb9ed2025893f03f4b5269f27881bc93e3b01332bee95501"
+            local_mining_public_key: Some("03b5315b9e444eb982c32834c0d1f83e4546ebbf17cabc089511c48d547fb2d251".to_string()),
+            max_unspent_utxos: None,
+        }
+    }
+}
+
 impl Config {
-    pub fn default(mainnet: bool, node_host: &str, node_port: u16) -> Config {
+    pub fn default() -> Config {
+        Config {
+            mainnet: true,
+            node_host: "localhost".into(),
+            node_port: 20443,
+            private_key: Secp256k1PrivateKey::random(),
+            storage: "./db".into(),
+            debug_path: "./debug.log".into(),
+            storage_addr:
+                QualifiedContractIdentifier::parse(
+                    "SP000000000000000000002Q6VF78.you-need-to-set-up-your-cosigner",
+                )
+                .unwrap(),
+            mock_stackerdb_paths: HashMap::new(),
+            bitcoin: ConfigBitcoin::default(),
+            __path: "".into(),
+        }
+    }
+    
+    pub fn new(mainnet: bool, node_host: String, node_port: u16) -> Config {
         Config {
             mainnet,
-            node_host: node_host.into(),
+            node_host,
             node_port,
             private_key: Secp256k1PrivateKey::random(),
             storage: "./db".into(),
@@ -162,6 +356,7 @@ impl Config {
                 )
                 .unwrap(),
             mock_stackerdb_paths: HashMap::new(),
+            bitcoin: ConfigBitcoin::default(),
             __path: "".into(),
         }
     }
@@ -215,6 +410,10 @@ impl Config {
         &self.mock_stackerdb_paths
     }
 
+    pub fn get_bitcoin_config(&self) -> &ConfigBitcoin {
+        &self.bitcoin
+    }
+
     /// This is the contract ID of the BNS contract that can resolve a name to its owner and price.
     pub fn get_bns_contract_id(&self) -> QualifiedContractIdentifier {
         if self.mainnet {
@@ -251,4 +450,3 @@ impl Config {
         self.abspath(&self.debug_path)
     }
 }
-

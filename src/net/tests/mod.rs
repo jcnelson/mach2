@@ -220,6 +220,7 @@ impl Write for MockHTTPSocket {
 
 #[test]
 fn test_run_http_request_with_body() {
+    // TODO: authorization header
     let tests = vec![
         ("GET", "/test-no-content-type-and-no-body", None, vec![]),
         (
@@ -265,6 +266,7 @@ fn test_run_http_request_with_body() {
             verb,
             path,
             content_type,
+            None,
             &payload,
         )
         .unwrap();
@@ -276,6 +278,7 @@ fn test_run_http_request_with_body() {
             verb,
             path,
             content_type,
+            None,
             &payload,
         )
         .unwrap();
@@ -285,6 +288,7 @@ fn test_run_http_request_with_body() {
 
 #[test]
 fn test_run_http_request_no_body() {
+    // TODO: authorization header
     let tests = vec![
         ("GET", "/test-no-content-type-and-no-body", None, vec![]),
         (
@@ -322,6 +326,7 @@ fn test_run_http_request_no_body() {
             verb,
             path,
             content_type,
+            None,
             &payload,
         )
         .unwrap();
@@ -331,6 +336,7 @@ fn test_run_http_request_no_body() {
             verb,
             path,
             content_type,
+            None,
             &payload,
         )
         .unwrap();

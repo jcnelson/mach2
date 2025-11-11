@@ -17,13 +17,14 @@ pub mod config;
 pub mod globals;
 
 use crate::core::globals::{Globals, GLOBALS};
-use crate::core::config::Config;
+
+pub use crate::core::config::Config;
 
 /// Initialize global config
 pub fn init(mainnet: bool, node_host: &str, node_port: u16) {
     match GLOBALS.lock() {
         Ok(mut globals) => {
-            globals.set_config(Config::default(mainnet, node_host, node_port));
+            globals.set_config(Config::new(mainnet, node_host.to_string(), node_port));
         }
         Err(_e) => {
             m2_error!("FATAL: global mutex poisoned");

@@ -13,20 +13,19 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#[macro_use]
-pub mod log;
-pub mod sqlite;
-pub mod string;
-pub mod tx;
+use stacks_common::types::chainstate::BurnchainHeaderHash;
+use stacks_common::types::chainstate::StacksAddress;
 
-use clarity::vm::types::StandardPrincipalData;
-use stacks_common::util::hash::Hash160;
-use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
+use crate::bitcoin::Txid;
 
-/// convert a private key into a standard principal
-pub fn privkey_to_principal(privk: &Secp256k1PrivateKey, version: u8) -> StandardPrincipalData {
-    let pubk = Secp256k1PublicKey::from_private(privk);
-    let h = Hash160::from_node_public_key(&pubk);
-    StandardPrincipalData::new(version, h.0).expect("FATAL: invalid version")
+/// Event details for a pegin
+#[derive(Clone, PartialEq, Debug)]
+pub struct BitcoinPegIn {
+    pub block_hash: BurnchainHeaderHash,
+    pub txid: Txid,
+    pub block_height: u32,
+    pub txindex: u32,
+    pub recipient: StacksAddress,
+    pub amount: u64
 }
 

@@ -29,7 +29,6 @@ extern crate lazy_static;
 #[macro_use]
 pub mod util;
 
-extern crate bitcoin;
 extern crate clarity_types;
 extern crate lzma_rs;
 extern crate rand;
@@ -40,9 +39,13 @@ extern crate stacks_common;
 extern crate toml;
 extern crate url;
 
+pub mod bitcoin;
 pub mod core;
+pub mod events;
 pub mod net;
 pub mod storage;
+#[cfg(test)]
+pub mod tests;
 pub mod vm;
 
 use std::io;

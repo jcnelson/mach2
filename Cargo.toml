@@ -15,17 +15,14 @@ serde = "1"
 serde_derive = "1"
 toml = "0.8.12"
 url = "2.5.4"
+base64ct = { version = "1.6.0", features = ["alloc"] }
 
 [patch.crates-io]
 stacker = { git = "https://github.com/jcnelson/stacker"}
 
-[dependencies.bitcoin]
-version = "0.32.7"
-features = ["std", "secp-recovery", "base64", "serde", "rand", "bitcoinconsensus-std"]
-
 [dependencies.serde_json]
 version = "1.0"
-features = ["arbitrary_precision", "unbounded_depth"]
+features = ["arbitrary_precision", "unbounded_depth", "raw_value"]
 
 [dependencies.rusqlite]
 version = "=0.31.0"
@@ -46,3 +43,7 @@ sha2 = { version = "0.10", features = ["asm"] }
 
 [target.'cfg(any(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")), any(target_os="windows")))'.dependencies]
 sha2 = { version = "0.10" }
+
+[dev-dependencies]
+mockito = "1.5"
+

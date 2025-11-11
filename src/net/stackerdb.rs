@@ -139,7 +139,7 @@ impl StackerDBSession {
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
         self.with_socket(|session, sock| {
-            run_http_request(sock, &session.host, verb, path, content_type, payload)
+            run_http_request(sock, &session.host, verb, path, content_type, None, payload)
         })?
     }
 
@@ -272,6 +272,7 @@ pub fn run_get_stackerdb_replicas(
             &stacks_address, &contract_id.name
         ),
         None,
+        None,
         &[],
     )?;
 
@@ -322,6 +323,7 @@ pub fn run_call_readonly(
             &contract_id.issuer, &contract_id.name, function_name
         ),
         Some("application/json"),
+        None,
         payload_json.as_bytes(),
     )?;
 
