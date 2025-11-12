@@ -219,7 +219,10 @@ impl RpcTransport {
             .map_err(Error::NetworkError)?;
 
         let json_payload = serde_json::to_vec(&payload).map_err(RpcError::EncodeJson)?;
+
+        m2_test_debug!("Send: {}", String::from_utf8_lossy(&json_payload));
         let response_bytes = run_http_request(&mut sock, &sockaddr, "POST", &self.build_req_path(relative_path), Some("application/json"), self.auth_credentials(), &json_payload)?;
+        m2_test_debug!("Recv: {}", String::from_utf8_lossy(&response_bytes));
         
         let parsed_response : JsonRpcResponse<T> = serde_json::from_slice(&response_bytes)
             .map_err(RpcError::DecodeJson)?;

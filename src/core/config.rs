@@ -410,8 +410,11 @@ impl Config {
         &self.mock_stackerdb_paths
     }
 
-    pub fn get_bitcoin_config(&self) -> &ConfigBitcoin {
-        &self.bitcoin
+    pub fn get_bitcoin_config(&self) -> ConfigBitcoin {
+        let Ok(config_file) = Config::from_path(&self.__path) else {
+            return self.bitcoin.clone();
+        };
+        config_file.bitcoin
     }
 
     /// This is the contract ID of the BNS contract that can resolve a name to its owner and price.

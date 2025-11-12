@@ -380,11 +380,12 @@ impl BitcoinRpcClient {
     /// `username` and `password` configuration are mandatory (`bitcoind` requires authentication for rpc calls),
     /// so a [`BitcoinRpcClientError::MissingCredentials`] is returned otherwise,
     pub fn from_config(config: &Config) -> BitcoinRpcClientResult<Self> {
-        let host = config.get_bitcoin_config().peer_host.clone();
-        let port = config.get_bitcoin_config().rpc_port;
-        let username_opt = &config.get_bitcoin_config().username;
-        let password_opt = &config.get_bitcoin_config().password;
-        let timeout = config.get_bitcoin_config().timeout;
+        let bitcoin_config = config.get_bitcoin_config();
+        let host = bitcoin_config.peer_host.clone();
+        let port = bitcoin_config.rpc_port;
+        let username_opt = &bitcoin_config.username;
+        let password_opt = &bitcoin_config.password;
+        let timeout = bitcoin_config.timeout;
         let client_id = "stacks".to_string();
 
         let rpc_auth = match (username_opt, password_opt) {

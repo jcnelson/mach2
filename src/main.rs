@@ -12,7 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 #![allow(deprecated)]
 #![allow(unused_imports)]
 #![allow(dead_code)]
@@ -34,6 +33,7 @@ extern crate lzma_rs;
 extern crate rand;
 extern crate regex;
 extern crate rusqlite;
+
 #[macro_use]
 extern crate stacks_common;
 extern crate toml;
