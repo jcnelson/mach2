@@ -23,7 +23,7 @@ use stacks_common::util::secp256k1;
 use stacks_common::deps_common::bitcoin::network::serialize::Error as BtcSerializeError;
 use stacks_common::types::chainstate::BurnchainHeaderHash;
 use stacks_common::util::HexError as btc_hex_error;
-use stacks_common::deps_common::bitcoin::util::hash::Sha256dHash;
+use stacks_common::util::hash::DoubleSha256;
 
 use serde::{Serialize, Deserialize};
 
@@ -33,6 +33,7 @@ use crate::util::sqlite::Error as DBError;
 pub mod address;
 pub mod bits;
 pub mod blocks;
+pub mod ops;
 pub mod rpc;
 pub mod signer;
 pub mod wallet;
@@ -50,19 +51,46 @@ pub const TXID_ENCODED_SIZE: u32 = 32;
 impl Txid {
     /// Create a [`Txid`] from the tx hash bytes used in bitcoin.
     /// This just reverses the inner bytes of the input.
-    pub fn from_bitcoin_tx_hash(tx_hash: &Sha256dHash) -> Txid {
+    pub fn from_bitcoin_tx_hash(tx_hash: &DoubleSha256) -> Self {
         let mut txid_bytes = tx_hash.0;
         txid_bytes.reverse();
         Self(txid_bytes)
     }
 
-    /// Create a [`Sha256dHash`] from a [`Txid`]
+    /// Create a [`DoubleSha256`] from a [`Txid`]
     /// This assumes the inner bytes are stored in "big-endian" (following the hex bitcoin string),
     /// so just reverse them to properly create a tx hash.
-    pub fn to_bitcoin_tx_hash(txid: &Txid) -> Sha256dHash {
+    pub fn to_bitcoin_tx_hash(txid: &Self) -> DoubleSha256 {
         let mut txid_bytes = txid.0;
         txid_bytes.reverse();
-        Sha256dHash(txid_bytes)
+        DoubleSha256(txid_bytes)
+    }
+}
+
+pub struct Wtxid(pub [u8; 32]);
+impl_array_newtype!(Wtxid, u8, 32);
+impl_array_hexstring_fmt!(Wtxid);
+impl_byte_array_newtype!(Wtxid, u8, 32);
+impl_byte_array_message_codec!(Wtxid, 32);
+impl_byte_array_serde!(Wtxid);
+pub const WTXID_ENCODED_SIZE: u32 = 32;
+
+impl Wtxid {
+    /// Create a [`Wtxid`] from the tx hash bytes used in bitcoin.
+    /// This just reverses the inner bytes of the input.
+    pub fn from_bitcoin_tx_hash(tx_hash: &DoubleSha256) -> Self {
+        let mut txid_bytes = tx_hash.0;
+        txid_bytes.reverse();
+        Self(txid_bytes)
+    }
+    
+    /// Create a [`DoubleSha256`] from a [`Wtxid`]
+    /// This assumes the inner bytes are stored in "big-endian" (following the hex bitcoin string),
+    /// so just reverse them to properly create a tx hash.
+    pub fn to_bitcoin_tx_hash(wtxid: &Self) -> DoubleSha256 {
+        let mut wtxid_bytes = wtxid.0;
+        wtxid_bytes.reverse();
+        DoubleSha256(wtxid_bytes)
     }
 }
 
@@ -72,7 +100,7 @@ impl_array_newtype!(MagicBytes, u8, 2);
 impl MagicBytes {
     pub fn default() -> MagicBytes {
         MACH2_MAGIC_MAINNET
-    }
+    }    
 }
 
 impl TryFrom<&str> for MagicBytes {
@@ -236,6 +264,7 @@ pub struct BitcoinTxInput {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct BitcoinTransaction {
     pub txid: Txid,
+    pub wtxid: Wtxid,
     pub vtxindex: u32,
     pub opcode: u8,
     pub data: Vec<u8>,

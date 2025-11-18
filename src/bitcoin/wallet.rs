@@ -35,7 +35,8 @@ use stacks_common::deps_common::bitcoin::blockdata::transaction::{
 use stacks_common::deps_common::bitcoin::network::serialize::{serialize, serialize_hex};
 use stacks_common::deps_common::bitcoin::util::hash::Sha256dHash;
 use stacks_common::types::chainstate::BurnchainHeaderHash;
-use stacks_common::util::hash::{hex_bytes, Hash160};
+use stacks_common::util::hash::{DoubleSha256, Hash160};
+use stacks_common::util::hash::{to_hex, hex_bytes};
 use stacks_common::util::secp256k1::Secp256k1PublicKey;
 use stacks_common::util::sleep_ms;
 
@@ -47,13 +48,11 @@ use crate::bitcoin::rpc::{
     Timestamp,
 };
 
+use serde::{Serialize, Deserialize};
 use crate::bitcoin::MagicBytes;
 
-/// The number of bitcoin blocks that can have
-///  passed since the UTXO cache was last refreshed before
-///  the cache is force-reset.
-const UTXO_CACHE_STALENESS_LIMIT: u64 = 6;
-const DUST_UTXO_LIMIT: u64 = 5500;
+
+pub const DUST_UTXO_LIMIT: u64 = 5500;
 
 #[cfg(test)]
 // Used to inject invalid block commits during testing.
@@ -164,7 +163,7 @@ impl BitcoinClient {
     ///
     /// Automatically imports descriptors into the wallet for the public_key
     #[cfg(test)]
-    pub fn get_all_utxos(&self, public_key: &Secp256k1PublicKey) -> Vec<UTXO> {
+    pub fn get_all_utxoset(&self, public_key: &Secp256k1PublicKey) -> UTXOSet {
         let address = self.get_wallet_address(public_key);
         m2_test_debug!("Import public key '{}'", &public_key.to_hex());
         self.import_public_key(&public_key)
@@ -179,7 +178,14 @@ impl BitcoinClient {
 
         self.retrieve_utxo_set(&address, true, 1, &None, 0)
             .unwrap_or_log_panic("retrieve all utxos")
-            .utxos
+    }
+    
+    /// Retrieves all UTXOs associated with the given public key.
+    ///
+    /// Automatically imports descriptors into the wallet for the public_key
+    #[cfg(test)]
+    pub fn get_all_utxos(&self, public_key: &Secp256k1PublicKey) -> Vec<UTXO> {
+        self.get_all_utxoset(public_key).utxos
     }
 
     /// Retrieve all loaded wallets.
@@ -562,7 +568,7 @@ impl BitcoinClient {
         for utxo in utxos_set.utxos.iter() {
             let input = TxIn {
                 previous_output: OutPoint {
-                    txid: utxo.txid.clone(),
+                    txid: Sha256dHash(utxo.txid.clone().0),
                     vout: utxo.vout,
                 },
                 script_sig: Script::new(),
@@ -729,13 +735,6 @@ impl BitcoinClient {
         self.config.bitcoin.segwit = segwit;
     }
 
-    fn make_operation_tx(
-        &mut self,
-        op_signer: &mut BitcoinOpSigner,
-    ) -> Result<Transaction, Error> {
-        todo!()
-    }
-
     /// Retrieves a raw [`Transaction`] by its [`Txid`]
     #[cfg(test)]
     pub fn get_raw_transaction(&self, txid: &Txid) -> Transaction {
@@ -792,7 +791,7 @@ impl BitcoinClient {
     }
 
     #[cfg(test)]
-    fn bootstrap_chain(&self, num_blocks: u64) {
+    pub fn bootstrap_chain(&self, num_blocks: u64) {
         let btc_config = self.config.get_bitcoin_config();
         let Some(local_mining_pubkey) = btc_config.local_mining_public_key.as_ref() else {
             m2_warn!("No local mining pubkey while bootstrapping bitcoin regtest, will not generate bitcoin blocks");
@@ -922,8 +921,6 @@ impl BitcoinClient {
         utxos_to_exclude: &Option<UTXOSet>,
         block_height: u64,
     ) -> BitcoinRpcClientResult<UTXOSet> {
-        let bhh = self.get_rpc_client().get_block_hash(block_height)?;
-
         const MIN_CONFIRMATIONS: u64 = 0;
         const MAX_CONFIRMATIONS: u64 = 9_999_999;
         let unspents = self.get_rpc_client().list_unspent(
@@ -955,17 +952,22 @@ impl BitcoinClient {
                 confirmations: each.confirmations,
             })
             .collect::<Vec<_>>();
-        Ok(UTXOSet { bhh, utxos })
+        Ok(UTXOSet { utxos })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UTXOSet {
-    bhh: BurnchainHeaderHash,
-    utxos: Vec<UTXO>,
+    pub utxos: Vec<UTXO>,
 }
 
 impl UTXOSet {
+    pub fn new() -> Self {
+        Self {
+            utxos: vec![]
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.utxos.len() == 0
     }
@@ -977,19 +979,45 @@ impl UTXOSet {
     pub fn num_utxos(&self) -> usize {
         self.utxos.len()
     }
+
+    pub fn add(&mut self, mut utxos: Vec<UTXO>) {
+        self.utxos.append(&mut utxos);
+    }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UTXO {
-    pub txid: Sha256dHash,
+    pub txid: DoubleSha256,
     pub vout: u32,
+    #[serde(
+        serialize_with = "btc_script_serialize",
+        deserialize_with = "btc_script_deserialize",
+    )]
     pub script_pub_key: Script,
     pub amount: u64,
     pub confirmations: u32,
 }
 
+fn btc_script_serialize<S: serde::Serializer>(
+    script: &Script,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let bytes = script.to_bytes();
+    let inst = to_hex(&bytes);
+    s.serialize_str(inst.as_str())
+}
+
+fn btc_script_deserialize<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Script, D::Error> {
+    let inst_str = String::deserialize(d)?;
+    let inst_bytes = hex_bytes(&inst_str).map_err(serde::de::Error::custom)?;
+    let script = Script::from(inst_bytes);
+    Ok(script)
+}
+
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::env::{self, temp_dir};
     use std::fs::File;
     use std::io::Write;
@@ -1004,7 +1032,7 @@ mod tests {
     use super::*;
     use crate::tests::BitcoinCoreController;
 
-    mod utils {
+    pub mod utils {
         use std::net::TcpListener;
 
         use crate::bitcoin::MagicBytes;
@@ -1133,7 +1161,7 @@ mod tests {
             for utxo in utxos.iter() {
                 let input = TxIn {
                     previous_output: OutPoint {
-                        txid: utxo.txid.clone(),
+                        txid: Sha256dHash(utxo.txid.clone().0),
                         vout: utxo.vout,
                     },
                     script_sig: Script::new(),
@@ -1232,7 +1260,7 @@ mod tests {
     fn test_multiple_inputs() {
         let spend_utxos = vec![
             UTXO {
-                txid: Sha256dHash::from_hex(
+                txid: DoubleSha256::from_hex(
                     "d3eafb3aba3cec925473550ed2e4d00bcb0d00744bb3212e4a8e72878909daee",
                 )
                 .unwrap(),
@@ -1245,7 +1273,7 @@ mod tests {
                 confirmations: 1421,
             },
             UTXO {
-                txid: Sha256dHash::from_hex(
+                txid: DoubleSha256::from_hex(
                     "01132f2d4a98cc715624e033214c8d841098a1ee15b30188ab89589a320b3b24",
                 )
                 .unwrap(),
@@ -1264,7 +1292,6 @@ mod tests {
 
         let mut btc_controller = BitcoinClient::new(config);
         let mut utxo_set = UTXOSet {
-            bhh: BurnchainHeaderHash([0x01; 32]),
             utxos: spend_utxos.clone(),
         };
         let mut transaction = Transaction {
@@ -1413,7 +1440,6 @@ mod tests {
         let utxo_set = btc_controller
             .retrieve_utxo_set(&address, false, 0, &None, 0)
             .expect("Failed to get utxos");
-        assert_eq!(btc_controller.get_block_hash(0), utxo_set.bhh);
         assert_eq!(50, utxo_set.num_utxos());
     }
 
@@ -1586,7 +1612,6 @@ mod tests {
             btc_controller.get_utxos(&miner_pubkey, 1, None, 101);
         let uxto_set = utxos_opt.expect("Shouldn't be None at height 101!");
 
-        assert_eq!(btc_controller.get_block_hash(101), uxto_set.bhh);
         assert_eq!(1, uxto_set.num_utxos());
         assert_eq!(5_000_000_000, uxto_set.total_available());
         let utxos = uxto_set.utxos;
@@ -1599,7 +1624,6 @@ mod tests {
             btc_controller.get_utxos(&miner_pubkey, 1, None, 102);
         let uxto_set = utxos_opt.expect("Shouldn't be None at height 102!");
 
-        assert_eq!(btc_controller.get_block_hash(102), uxto_set.bhh);
         assert_eq!(2, uxto_set.num_utxos());
         assert_eq!(10_000_000_000, uxto_set.total_available());
         let mut utxos = uxto_set.utxos;

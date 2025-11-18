@@ -416,7 +416,7 @@ mod tests {
             }
 
             let mut j = 0;
-            for (i, txout) in tx.output.iter().enumerate() {
+            for (_i, txout) in tx.output.iter().enumerate() {
                 if txout.script_pubkey.is_op_return() {
                     // our parser doesn't treat op_returns as first-class outputs
                     continue;
