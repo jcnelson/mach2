@@ -25,11 +25,13 @@ More information will be provided as it becomes available.
 ## Implementation Checklist
 
 - [X] Bitcoin peg-in transaction to lock BTC
+- [X] Bitcoin transfer transaction offchain
 - [X] Clarity smart contract for verifying a BTC lock-up
 - [ ] Clarity smart contract for instantiating StackerDBs for Mach2
   communication between users and the Mach2 cosigner.
+- [X] Off-chain DAG database for BTC
+- [ ] Off-chain DAG database for wrapped Stacks assets
 - [ ] Mach2 smart contract for locking Stacks assets
-- [ ] Off-chain DAG database for both BTC and wrapped Stacks assets
 - [ ] 2-phase commit cosigner for cosigning DAG transactions
 - [ ] CLI app for spending M2BTC between Mach2 users by appending DAG transactions
 - [ ] Instrumented Clarity VM with M2BTC keywords for transferring M2BTC, escrowing
