@@ -176,6 +176,20 @@ impl FromColumn<i64> for i64 {
     }
 }
 
+impl FromRow<u32> for u32 {
+    fn from_row(row: &Row) -> Result<u32, Error> {
+        let x: u32 = row.get(0)?;
+        Ok(x)
+    }
+}
+
+impl FromRow<Vec<u8>> for Vec<u8> {
+    fn from_row(row: &Row) -> Result<Vec<u8>, Error> {
+        let x: Vec<u8> = row.get(0)?;
+        Ok(x)
+    }
+}
+
 impl FromRow<StacksBlockId> for StacksBlockId {
     fn from_row<'a>(row: &'a Row) -> Result<StacksBlockId, Error> {
         let x: String = row.get_unwrap(0);
@@ -508,3 +522,37 @@ pub fn sqlite_open<P: AsRef<Path>>(
     }
     Ok(db)
 }
+
+macro_rules! impl_byte_array_from_column {
+    ($thing:ident) => {
+        impl rusqlite::types::FromSql for $thing {
+            fn column_result(
+                value: rusqlite::types::ValueRef,
+            ) -> rusqlite::types::FromSqlResult<Self> {
+                let hex_str = value.as_str()?;
+                let byte_str = stacks_common::util::hash::hex_bytes(hex_str)
+                    .map_err(|_e| rusqlite::types::FromSqlError::InvalidType)?;
+                let inst = $thing::from_bytes(&byte_str)
+                    .ok_or(rusqlite::types::FromSqlError::InvalidType)?;
+                Ok(inst)
+            }
+        }
+
+        impl crate::util::sqlite::FromColumn<$thing> for $thing {
+            fn from_column(
+                row: &rusqlite::Row,
+                column_name: &str,
+            ) -> Result<Self, crate::util::sqlite::Error> {
+                Ok(row.get::<_, Self>(column_name)?)
+            }
+        }
+
+        impl rusqlite::types::ToSql for $thing {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                let hex_str = self.to_hex();
+                Ok(hex_str.into())
+            }
+        }
+    };
+}
+

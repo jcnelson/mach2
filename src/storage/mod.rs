@@ -1,6 +1,7 @@
 // Copyright (C) 2013-2020 Blockstack PBC, a public benefit corporation
 // Copyright (C) 2020-2023 Stacks Open Internet Foundation
-// Copyright (C) 2023 Jude Nelson
+// Copyright (C) 2023-2025 Jude Nelson
+// Copyright (C) 2025 Stacks Open Internet Foundation
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -52,8 +53,12 @@ use crate::storage::mock::{MockStackerDBClient, LocalStackerDBClient};
 
 use crate::core::config::Config;
 
+pub mod dag;
 pub mod mock;
 pub mod stackerdb;
+
+#[cfg(test)]
+pub mod tests;
 
 /// Instantiated handle to mach2 stackerdb storage
 pub struct M2Storage {

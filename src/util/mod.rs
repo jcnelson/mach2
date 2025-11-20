@@ -15,6 +15,7 @@
 
 #[macro_use]
 pub mod log;
+#[macro_use]
 pub mod sqlite;
 pub mod string;
 pub mod tx;

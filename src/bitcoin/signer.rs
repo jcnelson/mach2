@@ -105,9 +105,11 @@ impl BitcoinOpSigner {
     ///
     /// # Returns
     ///
-    /// A `Secp256k1PublicKey` corresponding to the private key.
+    /// A `Secp256k1PublicKey` corresponding to the private key. It will be compressed.
     pub fn get_public_key(&mut self) -> Secp256k1PublicKey {
-        Secp256k1PublicKey::from_private(&self.secret_key)
+        let mut pubk = Secp256k1PublicKey::from_private(&self.secret_key);
+        pubk.set_compressed(true);
+        pubk
     }
 
     /// Signs the given message hash using the private key.

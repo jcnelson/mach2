@@ -36,14 +36,67 @@ use stacks_common::util::hash::hex_bytes;
 use stacks_common::deps_common::bitcoin::blockdata::script::Script;
 use stacks_common::deps_common::bitcoin::blockdata::transaction::Transaction;
 use stacks_common::deps_common::bitcoin::network::serialize::{
-    serialize_hex, Error as bitcoin_serialize_error,
+    serialize_hex, Error as bitcoin_serialize_error, deserialize_hex
 };
+use crate::bitcoin::BitcoinNetworkType;
 
 mod rpc_transport;
 #[cfg(test)]
 mod tests;
 
 use crate::bitcoin::rpc::rpc_transport::{RpcAuth, RpcError, RpcTransport};
+
+/// Deserializes a JSON string into [`BitcoinNetworkType`]
+pub(crate) fn deserialize_string_to_network_type<'de, D>(
+    deserializer: D,
+) -> Result<BitcoinNetworkType, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string: String = Deserialize::deserialize(deserializer)?;
+    match string.as_str() {
+        "main" => Ok(BitcoinNetworkType::Mainnet),
+        "test" => Ok(BitcoinNetworkType::Testnet),
+        "regtest" => Ok(BitcoinNetworkType::Regtest),
+        other => Err(serde::de::Error::custom(format!(
+            "invalid network type: {other}"
+        ))),
+    }
+}
+
+/// Deserializes a JSON string into [`BurnchainHeaderHash`]
+pub(crate) fn deserialize_string_to_burn_header_hash<'de, D>(
+    deserializer: D,
+) -> Result<BurnchainHeaderHash, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string: String = Deserialize::deserialize(deserializer)?;
+    BurnchainHeaderHash::from_hex(&string).map_err(serde::de::Error::custom)
+}
+
+/// Represents the response returned by the `getblockchaininfo` RPC call.
+///
+/// # Notes
+/// This struct supports a subset of available fields to match current usage.
+/// Additional fields can be added in the future as needed.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GetBlockChainInfoResponse {
+    /// the network name
+    #[serde(deserialize_with = "deserialize_string_to_network_type")]
+    pub chain: BitcoinNetworkType,
+    /// the height of the most-work fully-validated chain. The genesis block has height 0
+    pub blocks: u64,
+    /// the current number of headers that have been validated
+    pub headers: u64,
+    /// the hash of the currently best block
+    #[serde(
+        rename = "bestblockhash",
+        deserialize_with = "deserialize_string_to_burn_header_hash"
+    )]
+    pub best_block_hash: BurnchainHeaderHash,
+}
+
 
 /// Response structure for the `gettransaction` RPC call.
 ///
@@ -595,6 +648,39 @@ impl BitcoinRpcClient {
             vec![txid.to_hex().into()],
         )?)
     }
+
+    /// Retrieve general information about the current state of the blockchain.
+    ///
+    /// # Arguments
+    /// None.
+    ///
+    /// # Returns
+    /// A [`GetBlockChainInfoResponse`] struct containing blockchain metadata.
+    pub fn get_blockchain_info(&self) -> BitcoinRpcClientResult<GetBlockChainInfoResponse> {
+        Ok(self
+            .endpoint
+            .send(&self.client_id, None, "getblockchaininfo", vec![])?)
+    }
+
+    /// Retrieves and deserializes a raw Bitcoin transaction by its ID.
+    ///
+    /// # Arguments
+    /// * `txid` - The transaction ID (as [`Txid`]) to query (in big-endian order).
+    ///
+    /// # Returns
+    /// A [`Transaction`] struct representing the decoded transaction.
+    ///
+    /// # Availability
+    /// - **Since**: Bitcoin Core **v0.7.0**.
+    pub fn get_raw_transaction(&self, txid: &Txid) -> BitcoinRpcClientResult<Transaction> {
+        let raw_hex = self.endpoint.send::<String>(
+            &self.client_id,
+            None,
+            "getrawtransaction",
+            vec![txid.to_hex().into()],
+        )?;
+        Ok(deserialize_hex(&raw_hex)?)
+    }    
 
     /// Broadcasts a raw transaction to the Bitcoin network.
     ///

@@ -46,6 +46,7 @@ impl_array_hexstring_fmt!(Txid);
 impl_byte_array_newtype!(Txid, u8, 32);
 impl_byte_array_message_codec!(Txid, 32);
 impl_byte_array_serde!(Txid);
+impl_byte_array_from_column!(Txid);
 pub const TXID_ENCODED_SIZE: u32 = 32;
 
 impl Txid {
@@ -73,6 +74,7 @@ impl_array_hexstring_fmt!(Wtxid);
 impl_byte_array_newtype!(Wtxid, u8, 32);
 impl_byte_array_message_codec!(Wtxid, 32);
 impl_byte_array_serde!(Wtxid);
+impl_byte_array_from_column!(Wtxid);
 pub const WTXID_ENCODED_SIZE: u32 = 32;
 
 impl Wtxid {
