@@ -619,12 +619,18 @@ pub struct UTXOSet {
 }
 
 impl UTXOSet {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self {
             utxos: vec![]
         }
     }
 
+    pub fn new(utxos: Vec<UTXO>) -> Self {
+        Self {
+            utxos
+        }
+    }
+    
     pub fn is_empty(&self) -> bool {
         self.utxos.len() == 0
     }

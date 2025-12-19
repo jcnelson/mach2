@@ -22,6 +22,9 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 
+use stacks_common::consts::CHAIN_ID_MAINNET;
+use stacks_common::types::StacksEpochId;
+
 use crate::bitcoin::rpc::BitcoinRpcClient;
 use crate::core::Config;
 

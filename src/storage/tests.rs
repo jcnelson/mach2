@@ -27,6 +27,7 @@ use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::util::hash::to_hex;
 use stacks_common::types::PublicKey;
 use stacks_common::deps_common::bitcoin::blockdata::script::{Builder, Script};
+use stacks_common::types::chainstate::StacksAddress;
 
 #[test]
 fn test_dag_db_instantiation() {
@@ -61,7 +62,7 @@ fn test_store_pegin_transaction() {
     let mut m2_user_signer = utils::create_keychain_with_seed(3);
     let m2_user_pubkey = m2_user_signer.get_public_key();
 
-    let mut spender_utxos = UTXOSet::new();
+    let mut spender_utxos = UTXOSet::empty();
     spender_utxos.add(vec![
         UTXO {
             txid: DoubleSha256([0x11; 32]),
@@ -75,10 +76,10 @@ fn test_store_pegin_transaction() {
         }
     ]);
 
-    let mut cosigner_utxos = UTXOSet::new();
+    let mut cosigner_utxos = UTXOSet::empty();
 
     // lock until height 110
-    let mut pegin = M2PegIn::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x11; 32]), 1000000000)
+    let mut pegin = M2PegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, StacksAddress::new(0, Hash160([0x11; 20])).unwrap(), 1000000000)
         .with_spender(&user_pubkey);
     
     let mut pegin_tx = pegin.make_unsigned_pegin_transaction(2000, &mut spender_utxos).expect("Failed to create pegin transaction");
@@ -96,7 +97,7 @@ fn test_store_pegin_transaction() {
 
     m2_debug!("Recipient is {}", to_hex(&recipient));
     let tx = dag_db.tx_begin().unwrap();
-    tx.store_bitcoin_pegin_transaction(0, &pegin_tx, 2, 2, &[witness_script]).unwrap();
+    tx.store_bitcoin_pegin_transaction(&pegin_tx, 2, 2, &[witness_script]).unwrap();
     tx.commit().unwrap();
 
     let balance = dag_db.conn().get_balance(&recipient, 109).unwrap();

@@ -19,6 +19,7 @@ pub mod log;
 pub mod sqlite;
 pub mod string;
 pub mod tx;
+pub mod vm;
 
 use clarity::vm::types::StandardPrincipalData;
 use stacks_common::util::hash::Hash160;

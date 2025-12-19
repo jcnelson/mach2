@@ -21,6 +21,7 @@ use stacks_common::deps_common::bitcoin::blockdata::opcodes::All as btc_opcodes;
 use stacks_common::deps_common::bitcoin::blockdata::script::{Instruction, Script, Builder};
 use stacks_common::deps_common::bitcoin::blockdata::transaction::Transaction;
 use stacks_common::deps_common::bitcoin::network::serialize::serialize as btc_serialize;
+use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::util::secp256k1::{Secp256k1PublicKey, MessageSignature};
 use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::util::hash::to_hex;
@@ -64,7 +65,6 @@ fn test_send_pegin_tx_and_joint_spend() {
 
     let mut config = utils::create_cosigner_config();
     config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
-    config.bitcoin.segwit = true;
 
     let mut btcd_controller = BitcoinCoreController::from_config(&config);
     btcd_controller
@@ -82,8 +82,8 @@ fn test_send_pegin_tx_and_joint_spend() {
     let mut spender_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
     let mut cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
 
-    // lock until height 110
-    let mut pegin = M2PegIn::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x01; 32]), 1000000000)
+    // lock until height 110, with clawback at 120
+    let mut pegin = M2PegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, StacksAddress::new(1, Hash160([0x01; 20])).unwrap(), 1000000000)
         .with_spender(&user_pubkey);
 
     let mut pegin_tx = pegin.make_unsigned_pegin_transaction(2000, &mut spender_utxos).expect("Failed to create pegin transaction");
@@ -109,14 +109,17 @@ fn test_send_pegin_tx_and_joint_spend() {
     let txid = user_btc_controller.send_transaction(&pegin_tx).expect("Failed to send transaction");
 
     // mine it
+    let mut btc_height = 103;
     let mut mined = false;
     for _i in 0..100 {
         user_btc_controller.bootstrap_chain(1);
+        btc_height += 1;
         if user_btc_controller.is_transaction_confirmed(&txid) {
             mined = true;
             break;
         }
     }
+    assert!(btc_height < 110);
     assert!(mined, "transaction not mined");
     m2_debug!("Send peg-in {}", &txid);
     
@@ -125,7 +128,7 @@ fn test_send_pegin_tx_and_joint_spend() {
     let cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
     let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1);
 
-    let mut utxos = UTXOSet::new();
+    let mut utxos = UTXOSet::empty();
     utxos.add(spender_utxos.utxos);
     utxos.add(cosigner_utxos.utxos);
 
@@ -135,6 +138,8 @@ fn test_send_pegin_tx_and_joint_spend() {
     let mut pegin_spend = pegin.make_unsigned_pegin_spend_transaction(2000, &mut utxos, &pegin_utxos, false).expect("Failed to create joint spend transaction");
     eprintln!("unsigned pegin spend: {}", &pegin_spend.display());
     
+    pegin_spend.lock_time = 110;
+
     // m2 user signs
     assert!(pegin.sign_user(&mut m2_user_signer, &mut utxos, &mut pegin_spend));
     eprintln!("user-signed pegin spend: {}", &pegin_spend.display());
@@ -151,7 +156,7 @@ fn test_send_pegin_tx_and_joint_spend() {
 
     pegin.clear_witness();
 
-    // broadcast
+    user_btc_controller.bootstrap_chain(110 - btc_height);
     let txid = user_btc_controller.send_transaction(&pegin_spend).expect("Failed to send transaction");
 
     // mine it
@@ -189,7 +194,6 @@ fn test_send_pegin_tx_and_clawback() {
 
     let mut config = utils::create_cosigner_config();
     config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
-    config.bitcoin.segwit = true;
 
     let mut btcd_controller = BitcoinCoreController::from_config(&config);
     btcd_controller
@@ -207,8 +211,8 @@ fn test_send_pegin_tx_and_clawback() {
     let mut spender_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
     let mut cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
 
-    // lock until height 110
-    let mut pegin = M2PegIn::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x12; 32]), 1000000000)
+    // lock until height 120
+    let mut pegin = M2PegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, StacksAddress::new(1, Hash160([0x12; 20])).unwrap(), 1000000000)
         .with_spender(&user_pubkey);
 
     let mut pegin_tx = pegin.make_unsigned_pegin_transaction(2000, &mut spender_utxos).expect("Failed to create pegin transaction");
@@ -253,7 +257,7 @@ fn test_send_pegin_tx_and_clawback() {
     let cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
     let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1);
 
-    let mut utxos = UTXOSet::new();
+    let mut utxos = UTXOSet::empty();
     utxos.add(spender_utxos.utxos);
     utxos.add(cosigner_utxos.utxos);
 
@@ -263,7 +267,7 @@ fn test_send_pegin_tx_and_clawback() {
     eprintln!("unsigned pegin spend: {}", &pegin_spend.display());
     
     // set locktime
-    pegin_spend.lock_time = 110;
+    pegin_spend.lock_time = 120;
 
     // m2 user signs
     assert!(pegin.sign_user(&mut m2_user_signer, &mut utxos, &mut pegin_spend));
@@ -311,16 +315,11 @@ fn test_pegin_witness_script_unlock_height() {
     let m2_user_pubkey = m2_user_signer.get_public_key();
 
     // lock until height 110
-    let pegin = M2PegIn::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x23; 32]), 1000000000)
+    let pegin = M2PegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, StacksAddress::new(1, Hash160([0x23; 20])).unwrap(), 1000000000)
         .with_spender(&user_pubkey);
    
     let witness_script = pegin.make_witness_script();
-    assert_eq!(witness::unlock_height(&witness_script, 2, 2).unwrap(), 110);
-    
-    assert!(witness::unlock_height(&witness_script, 1, 2).is_none());
-    assert!(witness::unlock_height(&witness_script, 2, 3).is_none());
-    assert!(witness::unlock_height(&witness_script, 3, 3).is_none());
-    assert!(witness::unlock_height(&witness_script, 1, 1).is_none());
+    assert_eq!(witness::get_pegin_unlock_height(&witness_script).unwrap(), 120);
 }
 
 #[test]
@@ -356,7 +355,6 @@ fn test_send_pegin_and_transfer() {
 
     let mut config = utils::create_cosigner_config();
     config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
-    config.bitcoin.segwit = true;
 
     let mut btcd_controller = BitcoinCoreController::from_config(&config);
     btcd_controller
@@ -379,7 +377,7 @@ fn test_send_pegin_and_transfer() {
     cosigner_utxos.add(cosigner_utxos_2.utxos);
 
     // lock until height 110
-    let mut pegin = M2PegIn::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x01; 32]), 1000000000)
+    let mut pegin = M2PegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, StacksAddress::new(1, Hash160([0x01; 20])).unwrap(), 1000000000)
         .with_spender(&user_pubkey);
 
     let mut pegin_tx = pegin.make_unsigned_pegin_transaction(2000, &mut spender_utxos).expect("Failed to create pegin transaction");
@@ -420,20 +418,22 @@ fn test_send_pegin_and_transfer() {
     
     // this transaction is now spendable
     let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1);
-    let mut pegin_utxoset = UTXOSet::new();
+    let mut pegin_utxoset = UTXOSet::empty();
     pegin_utxoset.add(pegin_utxos);
 
     let pegin_witnesses = vec![pegin.make_witness_script()];
 
     assert_eq!(pegin_utxoset.len(), 1, "m2 user has no UTXOs");
 
-    // make an off-chain transfer
-    let mut transfer = M2Transfer::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x02; 32]));
+    // make an off-chain transfer, with safety margin 10 (so, unilterally spendable at 120)
+    let mut transfer = M2Transfer::new(10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, vec![0x02; 32]);
     let m2_user_reclaim_p2wsh = transfer.make_user_script_pubkey();
-    let recipient_code_hash = Sha512Trunc256Sum([0x10; 32]);
-    let recipient_p2wsh = transfer.make_recipient_script_pubkey(&recipient_pubkey, &recipient_code_hash);
+    let recipient_payload = vec![0x01; 32];
+    let recipient_p2wsh = transfer.make_recipient_script_pubkey(&recipient_pubkey, recipient_payload.clone());
     let mut transfer_tx = transfer.make_unsigned_transfer_spend_transaction(2000, &mut pegin_utxoset, &pegin_witnesses, recipient_p2wsh.clone(), 300000000)
         .expect("Failed to produce a transfer transaction");
+    transfer_tx.lock_time = 110;
+
     eprintln!("unsigned transfer tx: {}", &transfer_tx.display());
     assert_eq!(pegin_utxoset.len(), 1);
 
@@ -462,18 +462,21 @@ fn test_send_pegin_and_transfer() {
     assert_eq!(transfer_utxos.len(), 1);
     assert_eq!(m2_user_reclaim_utxos.len(), 1);
 
-    let mut transfer_utxoset = UTXOSet::new();
+    let mut transfer_utxoset = UTXOSet::empty();
     transfer_utxoset.add(transfer_utxos);
 
+    m2_test_debug!("transfer_utxoset: {:?}", &transfer_utxoset);
+    m2_test_debug!("m2_user_reclaim_utxos: {:?}", &m2_user_reclaim_utxos);
     let mut transfer_txs = vec![transfer_tx];
     
     // make another off-chain transfer which spends this last transfer
-    let recipient_2_code_hash = Sha512Trunc256Sum([0x20; 32]);
-    let recipient_2_p2wsh = transfer.make_recipient_script_pubkey(&recipient_2_pubkey, &recipient_2_code_hash);
-    let mut transfer = M2Transfer::new(110, &recipient_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, recipient_code_hash.clone());
+    let recipient_2_p2wsh = transfer.make_recipient_script_pubkey(&recipient_2_pubkey, vec![0x20; 32]);
+    let mut transfer = M2Transfer::new(10, &recipient_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, recipient_payload.clone());
     let mut transfer_tx = transfer.make_unsigned_transfer_spend_transaction(2000, &mut transfer_utxoset, &[], recipient_2_p2wsh.clone(), 200000000)
         .expect("Failed to produce a transfer transaction");
     eprintln!("unsigned transfer 2 tx: {}", &transfer_tx.display());
+
+    transfer_tx.lock_time = 110;
 
     // recipient signs
     assert!(transfer.sign_user(&mut recipient_signer, &mut transfer_utxoset, &[], &mut transfer_tx));
@@ -512,14 +515,17 @@ fn test_send_pegin_and_transfer() {
     // should work at or after 110
     for tx in transfer_txs.iter() {
         let res = user_btc_controller.send_transaction(tx);
-        eprintln!("Sent at 110 {}: {:?}", &tx.display(), &res);
+        eprintln!("Sent at {} {}: {:?}", btc_height, &tx.display(), &res);
         assert!(res.is_ok());
         txids.push(res.unwrap());
+
+        user_btc_controller.bootstrap_chain(10);
+        btc_height += 10;
     }
 
     let mut all_mined = false;
     
-    // mine them all
+    // make sure they're all mined
     for _i in 0..6 {
         user_btc_controller.bootstrap_chain(1);
         let mut mined = true;
@@ -544,10 +550,12 @@ fn test_send_pegin_and_transfer() {
     // have the m2 user acquire their UTXO.
     // They gave 3 BTC to recipient, and kept 7 BTC with 2000 sats feee.
     // Spend another 2000 stats to reclaim that 7 BTC - 4000 sats
-    let mut user_utxoset = UTXOSet::new();
+    let mut user_utxoset = UTXOSet::empty();
     user_utxoset.add(m2_user_reclaim_utxos);
-    let mut transfer = M2Transfer::new(110, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, Sha512Trunc256Sum([0x02; 32]));
+    let mut transfer = M2Transfer::new(10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, vec![0x02; 32]);
     let mut transfer_tx = transfer.make_unsigned_transfer_spend_transaction(2000, &mut user_utxoset, &[], pubkey_to_p2wpkh(&m2_user_pubkey), 700000000 - (2000 * 2)).unwrap();
+    
+    transfer_tx.lock_time = 120;
     
     // m2 user signs
     assert!(transfer.sign_user(&mut m2_user_signer, &mut user_utxoset, &[], &mut transfer_tx));
@@ -567,11 +575,13 @@ fn test_send_pegin_and_transfer() {
     // have recipient acquire their UTXO
     // They got 3 BTC from m2_user, sent 2 BTC to recipient_2 for 2000 sats, and are now trying to
     // claim the remaining 1 BTC - 4000 sats
-    let mut recipient_utxoset = UTXOSet::new();
+    let mut recipient_utxoset = UTXOSet::empty();
     recipient_utxoset.add(recipient_reclaim_utxos);
 
-    let mut transfer = M2Transfer::new(110, &recipient_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, recipient_code_hash.clone());
+    let mut transfer = M2Transfer::new(10, &recipient_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, recipient_payload.clone());
     let mut transfer_tx = transfer.make_unsigned_transfer_spend_transaction(2000, &mut recipient_utxoset, &[], pubkey_to_p2wpkh(&recipient_pubkey), 100000000 - (2000 * 2)).unwrap();
+    
+    transfer_tx.lock_time = 120;
     
     // recipient signs
     assert!(transfer.sign_user(&mut recipient_signer, &mut recipient_utxoset, &[], &mut transfer_tx));
@@ -590,12 +600,16 @@ fn test_send_pegin_and_transfer() {
 
     // have recipient 2 acquire their UTXO
     // They got 2 BTC from recipient
-    let mut recipient_2_utxoset = UTXOSet::new();
+    let mut recipient_2_utxoset = UTXOSet::empty();
     recipient_2_utxoset.add(recipient_2_reclaim_utxos);
 
-    let mut transfer = M2Transfer::new(110, &recipient_2_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, recipient_2_code_hash.clone());
+    m2_test_debug!("recipient_2_utxoset: {:?}", &recipient_2_utxoset);
+
+    let mut transfer = M2Transfer::new(10, &recipient_2_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], 2, vec![0x20; 32]);
     let mut transfer_tx = transfer.make_unsigned_transfer_spend_transaction(2000, &mut recipient_2_utxoset, &[], pubkey_to_p2wpkh(&recipient_2_pubkey), 200000000 - 2000).unwrap();
     
+    transfer_tx.lock_time = 120;
+
     // recipient signs
     assert!(transfer.sign_user(&mut recipient_2_signer, &mut recipient_2_utxoset, &[], &mut transfer_tx));
     eprintln!("recipient-signed transfer reclaim tx: {}", &transfer_tx.display());

@@ -107,7 +107,7 @@ pub struct GetBlockChainInfoResponse {
 /// Additional fields can be added in the future as needed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GetTransactionResponse {
-    pub confirmations: u32,
+    pub confirmations: i32,
 }
 
 /// Response returned by the `getdescriptorinfo` RPC call.

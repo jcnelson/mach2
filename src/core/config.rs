@@ -30,6 +30,66 @@ use toml;
 pub const DEFAULT_SATS_PER_VB: u64 = 50;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum PrivateKeyType {
+    User,
+    Cosigner,
+    Spender
+}
+
+impl PrivateKeyType {
+    pub fn to_string(&self) -> String {
+        match self {
+            Self::User => "user".into(),
+            Self::Cosigner => "cosigner".into(),
+            Self::Spender => "spender".into()
+        }
+    }
+}
+
+impl TryFrom<&str> for PrivateKeyType {
+    type Error = ();
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "user" => Ok(Self::User),
+            "cosigner" => Ok(Self::Cosigner),
+            "spender" => Ok(Self::Spender),
+            _ => Err(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigPrivateKey {
+    /// type of private key 
+    pub key_type: PrivateKeyType,
+    /// key itself
+    pub key: Secp256k1PrivateKey
+}
+
+impl ConfigPrivateKey {
+    pub fn new_user(key: Secp256k1PrivateKey) -> Self {
+        Self {
+            key_type: PrivateKeyType::User,
+            key
+        }
+    }
+
+    pub fn new_cosigner(key: Secp256k1PrivateKey) -> Self {
+        Self {
+            key_type: PrivateKeyType::Cosigner,
+            key
+        }
+    }
+
+    pub fn new_spender(key: Secp256k1PrivateKey) -> Self {
+        Self {
+            key_type: PrivateKeyType::Spender,
+            key
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigBitcoin {
     /// magic bytes to scan for
     pub magic_bytes: MagicBytes,
@@ -53,8 +113,6 @@ pub struct ConfigBitcoin {
     pub rbf_fee_increment: u64,
     /// maximum RBF 
     pub max_rbf: u64,
-    /// whether or not to sign transactions with native segwit
-    pub segwit: bool,
     /// name of wallet to ues
     pub wallet_name: String,
     /// data path for bitcoin state (only needed for testing)
@@ -73,17 +131,21 @@ pub struct Config {
     node_host: String,
     /// stacks node port
     node_port: u16,
-    /// identity key
-    private_key: Secp256k1PrivateKey,
+    /// identity key for storing data in stackerdb
+    storage_private_key: Secp256k1PrivateKey,
     /// location where we store local DBs
     /// (relative or absolute)
     storage: String,
-    /// location of the debug file
-    debug_path: String,
     /// our stackerdb contract address
     storage_addr: QualifiedContractIdentifier,
     /// Path to mocked stackerdb databases
     mock_stackerdb_paths: HashMap<QualifiedContractIdentifier, String>,
+    /// Cosigner private key(s)
+    cosigner_private_keys: Vec<Secp256k1PrivateKey>,
+    /// User private key
+    user_private_key: Secp256k1PrivateKey,
+    /// Spender private key
+    spender_private_key: Option<Secp256k1PrivateKey>,
 
     /// bitcoin config (visible to tests)
     #[cfg(test)]
@@ -96,6 +158,14 @@ pub struct Config {
     pub __path: String,
     #[cfg(not(test))]
     __path: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConfigFilePrivateKey {
+    /// private key type
+    key_type: String,
+    /// key 
+    key: String
 }
 
 #[derive(Serialize, Deserialize)]
@@ -130,8 +200,6 @@ pub struct ConfigFileBitcoin {
     rbf_fee_increment: u64,
     /// maximum RBF 
     max_rbf: u64,
-    /// segwit?
-    segwit: bool,
     /// wallet name
     wallet_name: Option<String>,
     /// bitcoin storage dir (only needed for testing)
@@ -150,17 +218,17 @@ pub struct ConfigFile {
     node_host: String,
     /// node port
     node_port: u16,
-    /// identity key
-    private_key: String,
+    /// identity key for stackerdb
+    storage_private_key: String,
     /// location where we store local DBs
     /// (relative or absolute)
     storage: Option<String>,
-    /// location of the debug file
-    debug_path: Option<String>,
     /// our stackerdb contract address
     storage_addr: String,
     /// Bitcoin config
     bitcoin: Option<ConfigFileBitcoin>,
+    /// Private keys
+    private_keys: Vec<ConfigFilePrivateKey>,
     /// Path to mocked stackerdb databases
     mocked_stackerdb: Option<Vec<ConfigFileMockStackerDB>>,
 }
@@ -201,11 +269,24 @@ impl TryFrom<ConfigFileBitcoin> for ConfigBitcoin {
             satoshis_per_byte: config_file.satoshis_per_byte,
             rbf_fee_increment: config_file.rbf_fee_increment,
             max_rbf: config_file.max_rbf,
-            segwit: config_file.segwit,
             wallet_name: config_file.wallet_name.unwrap_or("".to_string()),
             datadir: config_file.datadir.unwrap_or("/tmp/mach2-bitcoin-datadir".to_string()),
             local_mining_public_key: config_file.local_mining_public_key,
             max_unspent_utxos: config_file.max_unspent_utxos,
+        })
+    }
+}
+
+impl TryFrom<ConfigFilePrivateKey> for ConfigPrivateKey {
+    type Error = String;
+    fn try_from(config_file: ConfigFilePrivateKey) -> Result<Self, Self::Error> {
+        let key_type = PrivateKeyType::try_from(config_file.key_type.as_str())
+            .map_err(|_| format!("Unrecognized key type '{}'", &config_file.key_type))?;
+        let key = Secp256k1PrivateKey::from_hex(&config_file.key)
+            .map_err(|e| format!("Unparseable private key: {e:?}"))?;
+        Ok(Self {
+            key_type,
+            key
         })
     }
 }
@@ -234,16 +315,46 @@ impl TryFrom<ConfigFile> for Config {
             }
         }
 
+        let mut user_private_key = None;
+        let mut spender_private_key = None;
+        let mut cosigner_private_keys = vec![];
+        for privk in config_file.private_keys.into_iter() {
+            let key_info = ConfigPrivateKey::try_from(privk)?;
+            match key_info.key_type {
+                PrivateKeyType::User => {
+                    if user_private_key.is_some() {
+                        return Err("More than one user private key".into());
+                    }
+                    user_private_key.replace(key_info.key);
+                }
+                PrivateKeyType::Spender => {
+                    if spender_private_key.is_some() {
+                        return Err("More than one spender private key".into());
+                    }
+                    spender_private_key.replace(key_info.key);
+                }
+                PrivateKeyType::Cosigner => {
+                    cosigner_private_keys.push(key_info.key);
+                }
+            }
+        }
+
+        let Some(user_private_key) = user_private_key.take() else {
+            return Err("Missing [private_key] section with `key_type = \"user\"`".into());
+        };
+
         Ok(Config {
             mainnet: config_file.mainnet,
             node_host: config_file.node_host,
             node_port: config_file.node_port,
-            private_key: Secp256k1PrivateKey::from_hex(&config_file.private_key)
+            storage_private_key: Secp256k1PrivateKey::from_hex(&config_file.storage_private_key)
                 .map_err(|e| format!("Failed to parse `private_key`: {:?}", &e))?,
             storage: config_file.storage.unwrap_or("./db".into()),
-            debug_path: config_file.debug_path.unwrap_or("./debug.log".into()),
             storage_addr: default_storage,
             mock_stackerdb_paths,
+            user_private_key,
+            spender_private_key,
+            cosigner_private_keys,
             bitcoin: config_file.bitcoin.map(|btc_cfg| btc_cfg.try_into()).unwrap_or(Ok(ConfigBitcoin::default()))?,
             __path: "".into(),
         })
@@ -264,7 +375,6 @@ impl From<ConfigBitcoin> for ConfigFileBitcoin {
             satoshis_per_byte: config.satoshis_per_byte,
             rbf_fee_increment: config.rbf_fee_increment,
             max_rbf: config.max_rbf,
-            segwit: config.segwit,
             wallet_name: Some(config.wallet_name),
             datadir: Some(config.datadir),
             local_mining_public_key: config.local_mining_public_key,
@@ -273,17 +383,36 @@ impl From<ConfigBitcoin> for ConfigFileBitcoin {
     }
 }
 
+impl From<ConfigPrivateKey> for ConfigFilePrivateKey {
+    fn from(config: ConfigPrivateKey) -> Self {
+        Self {
+            key_type: config.key_type.to_string(),
+            key: config.key.to_hex()
+        }
+    }
+}
+
 impl From<Config> for ConfigFile {
     fn from(config: Config) -> Self {
+        let mut private_keys = vec![];
+        private_keys.push(ConfigPrivateKey::new_user(config.user_private_key).into());
+        if let Some(spender_key) = config.spender_private_key {
+            private_keys.push(ConfigPrivateKey::new_spender(spender_key).into());
+        }
+        private_keys.extend(config
+            .cosigner_private_keys
+            .into_iter()
+            .map(|k| ConfigPrivateKey::new_cosigner(k).into())
+        );
         Self {
             mainnet: config.mainnet,
             node_host: config.node_host.clone(),
             node_port: config.node_port,
-            private_key: config.private_key.to_hex(),
+            storage_private_key: config.storage_private_key.to_hex(),
             storage: Some(config.storage),
-            debug_path: Some(config.debug_path),
             storage_addr: config.storage_addr.to_string(),
             bitcoin: Some(config.bitcoin.into()),
+            private_keys,
             mocked_stackerdb: Some(
                 config
                     .mock_stackerdb_paths
@@ -312,7 +441,6 @@ impl ConfigBitcoin {
             satoshis_per_byte: DEFAULT_SATS_PER_VB, 
             rbf_fee_increment: 0,
             max_rbf: 0,
-            segwit: true,
             wallet_name: "".to_string(),
             datadir: "/tmp/mach2-bitcoin-datadir".to_string(),
             // this is "0b6945219066768aaafb9ed2025893f03f4b5269f27881bc93e3b01332bee95501"
@@ -328,9 +456,8 @@ impl Config {
             mainnet: true,
             node_host: "localhost".into(),
             node_port: 20443,
-            private_key: Secp256k1PrivateKey::random(),
+            storage_private_key: Secp256k1PrivateKey::random(),
             storage: "./db".into(),
-            debug_path: "./debug.log".into(),
             storage_addr:
                 QualifiedContractIdentifier::parse(
                     "SP000000000000000000002Q6VF78.you-need-to-set-up-your-cosigner",
@@ -338,6 +465,9 @@ impl Config {
                 .unwrap(),
             mock_stackerdb_paths: HashMap::new(),
             bitcoin: ConfigBitcoin::default(),
+            user_private_key: Secp256k1PrivateKey::random(),
+            spender_private_key: None,
+            cosigner_private_keys: vec![],
             __path: "".into(),
         }
     }
@@ -347,9 +477,8 @@ impl Config {
             mainnet,
             node_host,
             node_port,
-            private_key: Secp256k1PrivateKey::random(),
+            storage_private_key: Secp256k1PrivateKey::random(),
             storage: "./db".into(),
-            debug_path: "./debug.log".into(),
             storage_addr:
                 QualifiedContractIdentifier::parse(
                     "SP000000000000000000002Q6VF78.you-need-to-set-up-your-cosigner",
@@ -357,6 +486,9 @@ impl Config {
                 .unwrap(),
             mock_stackerdb_paths: HashMap::new(),
             bitcoin: ConfigBitcoin::default(),
+            user_private_key: Secp256k1PrivateKey::random(),
+            spender_private_key: None,
+            cosigner_private_keys: vec![],
             __path: "".into(),
         }
     }
@@ -398,8 +530,8 @@ impl Config {
         (self.node_host.clone(), self.node_port)
     }
 
-    pub fn private_key(&self) -> &Secp256k1PrivateKey {
-        &self.private_key
+    pub fn storage_private_key(&self) -> &Secp256k1PrivateKey {
+        &self.storage_private_key
     }
 
     pub fn default_storage_addr(&self) -> &QualifiedContractIdentifier {
@@ -417,39 +549,23 @@ impl Config {
         config_file.bitcoin
     }
 
-    /// This is the contract ID of the BNS contract that can resolve a name to its owner and price.
-    pub fn get_bns_contract_id(&self) -> QualifiedContractIdentifier {
-        if self.mainnet {
-            QualifiedContractIdentifier::parse("SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.BNS-V2")
-                .unwrap()
-        } else {
-            // private key: e89bb394ecd5161007a84b34ac98d4f7239016c91d3e0c7c3b97aa499693288301
-            QualifiedContractIdentifier::parse("ST1V5THTGSFT6Z793AT7M2H18G3Y9EGVJZNH5E2BG.BNS-V2")
-                .unwrap()
-        }
+    pub fn user_private_key(&self) -> &Secp256k1PrivateKey {
+        &self.user_private_key
+    }
+    
+    pub fn spender_private_key(&self) -> Option<&Secp256k1PrivateKey> {
+        self.spender_private_key.as_ref()
+    }
+    
+    pub fn cosigner_private_keys(&self) -> &[Secp256k1PrivateKey] {
+        &self.cosigner_private_keys
     }
 
-    /// This is the contract ID of the BNS contract that can resolve a name to a zonefile.
-    pub fn get_zonefile_contract_id(&self) -> QualifiedContractIdentifier {
-        if self.mainnet {
-            QualifiedContractIdentifier::parse(
-                "SP2QEZ06AGJ3RKJPBV14SY1V5BBFNAW33D96YPGZF.zonefile-resolver",
-            )
-            .unwrap()
-        } else {
-            // private key: e89bb394ecd5161007a84b34ac98d4f7239016c91d3e0c7c3b97aa499693288301
-            QualifiedContractIdentifier::parse(
-                "ST1V5THTGSFT6Z793AT7M2H18G3Y9EGVJZNH5E2BG.zonefile-resolver",
-            )
-            .unwrap()
-        }
-    }
-
-    pub fn db_path(&self) -> String {
+    pub fn db_root(&self) -> String {
         self.abspath(&self.storage)
     }
 
-    pub fn debug_path(&self) -> String {
-        self.abspath(&self.debug_path)
+    pub fn dag_db_path(&self) -> String {
+        format!("{}/dag.db", &self.db_root())
     }
 }

@@ -53,6 +53,8 @@ use crate::storage::mock::{MockStackerDBClient, LocalStackerDBClient};
 
 use crate::core::config::Config;
 
+use crate::storage::dag::DagDB;
+
 pub mod dag;
 pub mod mock;
 pub mod stackerdb;
@@ -173,7 +175,7 @@ impl M2Storage {
     }
 
     pub fn open_session(config: &Config, stackerdb_addr: &QualifiedContractIdentifier) -> Result<Self, Error> {
-        let privkey = config.private_key().clone();
+        let privkey = config.storage_private_key().clone();
         let home_stackerdb_client = Self::get_home_stackerdb_client(config, stackerdb_addr.clone(), privkey.clone())?;
         let replica_stackerdb_client = Self::get_replica_stackerdb_client(config, stackerdb_addr.clone(), privkey.clone())?;
         let session = Self::open(home_stackerdb_client, replica_stackerdb_client, privkey)?;

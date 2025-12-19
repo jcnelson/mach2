@@ -21,6 +21,7 @@ use stacks_common::deps_common::bitcoin::blockdata::transaction::{TxIn, TxOut, O
 use stacks_common::deps_common::bitcoin::util::hash::Sha256dHash;
 use stacks_common::util::secp256k1::{Secp256k1PublicKey, Secp256k1PrivateKey, MessageSignature};
 use stacks_common::types::PublicKey;
+use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::util::hash::DoubleSha256;
 use stacks_common::util::hash::Sha512Trunc256Sum;
 use stacks_common::util::hash::Hash160;
@@ -29,32 +30,49 @@ use crate::bitcoin::blocks::BitcoinHashExtensions;
 use crate::bitcoin::signer::BitcoinOpSigner;
 use crate::bitcoin::wallet::{UTXO, UTXOSet, DUST_UTXO_LIMIT};
 
-use crate::bitcoin::ops::{M2Ops, M2Marker, witness};
+use crate::bitcoin::ops::{M2Ops, witness};
+
+pub trait StacksAddressExtensions {
+    fn to_pushdata(&self) -> [u8; 21];
+}
+
+impl StacksAddressExtensions for StacksAddress {
+    fn to_pushdata(&self) -> [u8; 21] {
+        let version = self.version();
+        let hash160 = self.bytes().0;
+        let mut ret = [0u8; 21];
+        ret[0] = version;
+        ret[1..21].copy_from_slice(&hash160);
+        ret
+    }
+}
 
 pub struct M2PegIn {
     locktime: u32,
+    safety_margin: u32,
     spender_pubkey: Secp256k1PublicKey,
     user_pubkey: Secp256k1PublicKey,
     user_signature_witness: Vec<u8>,    // one user signature for now
     cosigner_pubkeys: Vec<Secp256k1PublicKey>,
     cosigner_threshold: u8,
     cosigner_signature_witness: Vec<Vec<u8>>,
-    code_hash: Sha512Trunc256Sum,
+    recipient: StacksAddress,
     amount: u64
 }
 
 impl M2PegIn {
-    pub fn new(locktime: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], cosigner_threshold: u8, code_hash: Sha512Trunc256Sum, amount: u64) -> Self {
+    pub fn new(locktime: u32, safety_margin: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], cosigner_threshold: u8, recipient: StacksAddress, amount: u64) -> Self {
         Self {
             locktime,
+            safety_margin,
             user_pubkey: user_pubkey.clone(),
             user_signature_witness: vec![],
             spender_pubkey: user_pubkey.clone(),
             cosigner_pubkeys: cosigner_pubkeys.to_vec(),
             cosigner_threshold,
             cosigner_signature_witness: vec![],
-            code_hash,
-            amount
+            recipient,
+            amount,
         }
     }
 
@@ -68,7 +86,7 @@ impl M2PegIn {
     }
 
     pub fn make_witness_script(&self) -> Script {
-        witness::make_witness_script_for_op(M2Ops::PegIn, &self.user_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, &self.code_hash, self.locktime)
+        witness::make_witness_script_for_pegin(&self.user_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, &self.recipient, self.locktime, self.safety_margin)
     }
 
     pub fn p2wsh_pegin_script_pubkey(&self) -> Script {
@@ -76,8 +94,24 @@ impl M2PegIn {
         prog.to_v0_p2wsh()
     }
 
-    pub fn make_pegin_spend_txin(&self, utxo: &UTXO) -> TxIn {
-        witness::make_txin_from_witness_script(utxo, &self.make_witness_script())
+    /// Make a TxIn which spends a UTXO whose witness program matches the witness script code we'd
+    /// generate
+    pub fn make_pegin_spend_txin(utxo: &UTXO, witness_script: &Script) -> TxIn {
+        let witness : Vec<Vec<u8>> = witness::make_initial_witness_stack_from_script(witness_script)
+            .into_iter()
+            .map(|s| s.to_bytes())
+            .collect();
+
+        let input = TxIn {
+            previous_output: OutPoint {
+                txid: Sha256dHash(utxo.txid.clone().0),
+                vout: utxo.vout
+            },
+            script_sig: Script::new(),
+            sequence: 0xfffffffd,   // allow RBF
+            witness,
+        };
+        input
     }
 
     pub fn spender_p2wpkh(&self) -> Script {
@@ -288,7 +322,7 @@ impl M2PegIn {
         for utxo in utxos_set.utxos.iter() {
             let input = if utxo.script_pub_key == pegin_p2wsh {
                 // spending a previously-locked peg-in 
-                self.make_pegin_spend_txin(utxo)
+                Self::make_pegin_spend_txin(utxo, &self.make_witness_script())
             }
             else if utxo.script_pub_key == spender_p2wpkh {
                 // spending a p2wpkh

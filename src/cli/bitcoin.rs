@@ -29,7 +29,7 @@ use stacks_common::util::hash::DoubleSha256;
 use crate::bitcoin::{Txid, Wtxid};
 use crate::bitcoin::blocks::{TransactionExtensions, BlockExtensions, BitcoinHashExtensions, bitcoin_merkle_tree};
 
-use crate::vm::clarity_vm::vm_execute;
+use crate::util::vm::vm_execute;
 
 use clarity::vm::ClarityVersion;
 

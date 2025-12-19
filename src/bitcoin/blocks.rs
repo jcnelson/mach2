@@ -546,7 +546,8 @@ mod tests {
     };
     use crate::bitcoin::{MagicBytes, Txid, Wtxid};
     use crate::bitcoin::blocks::bitcoin_merkle_tree;
-    use crate::vm::clarity_vm::vm_execute;
+
+    use crate::util::vm::vm_execute;
 
     use clarity::vm::ClarityVersion;
 

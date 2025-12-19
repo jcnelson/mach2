@@ -28,7 +28,8 @@ use stacks_common::deps_common::bitcoin::network::serialize::serialize as btc_se
 use stacks_common::deps_common::bitcoin::network::serialize::BitcoinHash;
 use stacks_common::deps_common::bitcoin::blockdata::script::{Instruction, Script, Builder};
 use stacks_common::deps_common::bitcoin::blockdata::transaction::{TxIn, TxOut, OutPoint, Transaction as BtcTransaction};
-use stacks_common::util::hash::Sha512Trunc256Sum;
+use stacks_common::util::hash::DoubleSha256;
+use stacks_common::types::PublicKey;
 use stacks_common::codec::{StacksMessageCodec, read_next, write_next, Error as CodecError};
 
 use rusqlite::types::ToSql;
@@ -40,6 +41,8 @@ use rusqlite::Row;
 use rusqlite::Transaction;
 use rusqlite::params;
 
+use crate::bitcoin::Txid;
+use crate::bitcoin::wallet::{UTXOSet, UTXO};
 use crate::bitcoin::ops::M2PegIn;
 use crate::bitcoin::blocks::TransactionExtensions;
 use crate::bitcoin::ops::witness;
@@ -63,8 +66,12 @@ const DAG_DB_SCHEMA_1 : &'static [&'static str] = &[
         vout INTEGER NOT NULL,
         -- Bitcoin block at which this BTC output can be spent on-chain (and thus would not count towards anyone's balance)
         expiry INTEGER NOT NULL,
-        -- Hash of the Mach2 code which encumbers this output
-        code_hash TEXT NOT NULL,
+        -- user's public key
+        user_pubkey TEXT NOT NULL,
+        -- user's p2wpkh output
+        user_p2wpkh TEXT NOT NULL,
+        -- witness script that hashes to the script_pubkey
+        witness_script TEXT NOT NULL,
         
         PRIMARY KEY(txid,vout),
        
@@ -73,7 +80,8 @@ const DAG_DB_SCHEMA_1 : &'static [&'static str] = &[
     );
     CREATE INDEX btc_outputs_by_txid ON btc_outputs(txid);
     CREATE INDEX btc_outputs_by_expiry ON btc_outputs(expiry);
-    CREATE INDEX btc_outputs_by_code_hash ON btc_outputs(code_hash);
+    CREATE INDEX btc_outputs_by_user_p2wpkh ON btc_outputs(user_p2wpkh);
+    CREATE INDEX btc_outputs_by_script_pubkey ON btc_outputs(script_pubkey);
     "#,
     r#"
     CREATE TABLE btc_inputs(
@@ -108,21 +116,18 @@ const DAG_DB_SCHEMA_1 : &'static [&'static str] = &[
         txid TEXT PRIMARY KEY NOT NULL,
         -- witness transaction ID
         wtxid TEXT NOT NULL, 
-        -- 2PC round that produced this transaction
-        round_id INTEGER NOT NULL,
         -- transaction body
         body BLOB NOT NULL
     );
     CREATE INDEX btc_transactions_by_wtxid ON btc_transactions(wtxid);
-    CREATE INDEX btc_transactions_by_round_id ON btc_transactions(round_id);
     "#,
     r#"
-    CREATE TABLE db_config(
+    CREATE TABLE dag_db_config(
         schema_version INTEGER NOT NULL
     );
     "#,
     r#"
-    INSERT INTO db_config (schema_version) VALUES (1);
+    INSERT INTO dag_db_config (schema_version) VALUES (1);
     "#,
 ];
 
@@ -136,6 +141,7 @@ pub enum Error {
     BtcCodec(BtcSerializeError),
     Overflow,
     MissingUTXO,
+    InvalidPeginWitness(Script),
 }
 
 impl From<DBError> for Error {
@@ -226,13 +232,13 @@ impl DagDB {
     }
 
     pub fn get_schema_version(conn: &Connection) -> Result<u32, Error> {
-        if !table_exists(conn, "db_config")? {
-            m2_debug!("No table 'db_config'");
+        if !table_exists(conn, "dag_db_config")? {
+            m2_debug!("No table 'dag_db_config'");
             return Ok(0);
         }
-        let result : u32 = query_row(conn, "SELECT schema_version FROM db_config", params![])?
+        let result : u32 = query_row(conn, "SELECT schema_version FROM dag_db_config", params![])?
             .unwrap_or_else(|| {
-                m2_debug!("No schema_version in db_config");
+                m2_debug!("No schema_version in dag_db_config");
                 0
             });
         Ok(result)
@@ -320,35 +326,94 @@ impl<'a> DagConn<'a> {
         Ok(Some(tx))
     }
     
-    pub fn get_utxo_expiry(&self, txid: &Sha256dHash, vout: u32) -> Result<Option<u64>, Error> {
+    pub fn get_utxo_expiry(&self, txid: &Sha256dHash, vout: u32) -> Result<Option<u32>, Error> {
         let res : Option<i64> = query_row(&self.conn, "SELECT 1 FROM btc_inputs WHERE prev_txid = ?1 AND vout = ?2", params![&txid, &vout])?;
         if res.is_some() {
             // TXO was already spent
             return Ok(None);
         }
 
-        let expiry_opt : Option<i64> = query_row(&self.conn, "SELECT expiry FROM btc_outputs WHERE txid = ?1 AND vout = ?2", params![&txid, &vout])?;
-        let Some(expiry_i64) = expiry_opt else {
-            // TXO not present in the DB
-            return Ok(None);
-        };
-        let Ok(expiry) = u64::try_from(expiry_i64) else {
-            // corruption
-            return Err(DBError::Corruption.into())
-        };
-
-        Ok(Some(expiry))
+        let expiry_opt : Option<u32> = query_row(&self.conn, "SELECT expiry FROM btc_outputs WHERE txid = ?1 AND vout = ?2", params![&txid, &vout])?;
+        Ok(expiry_opt)
     }
 
-    /// Get the unexpired balance of a recipient.
+    /// Get the unexpired balance of a scriptpubkey.
     /// `recipient` is the script_pubkey
-    pub fn get_balance(&self, recipient: &[u8], cur_bitcoin_height: u64) -> Result<u64, Error> {
+    pub fn get_balance(&self, recipient_scriptpubkey: &[u8], cur_bitcoin_height: u64) -> Result<u64, Error> {
         let cur_bitcoin_height_i64 = i64::try_from(cur_bitcoin_height).map_err(|_| Error::Overflow)?;
-        let balance_i64 = query_int(&self.conn, "SELECT IFNULL(SUM(amount),0) FROM btc_outputs WHERE script_pubkey = ?1 AND ?2 < expiry", params![&recipient, cur_bitcoin_height_i64])?;
+        let balance_i64 = query_int(&self.conn,
+            "SELECT IFNULL(SUM(btc_outputs.amount),0)
+            FROM btc_outputs LEFT OUTER JOIN btc_inputs ON btc_outputs.txid = btc_inputs.prev_txid
+            WHERE btc_inputs.prev_txid IS NULL AND btc_outputs.script_pubkey = ?1 AND ?2 < btc_outputs.expiry"
+            , params![recipient_scriptpubkey, cur_bitcoin_height_i64])?;
         let Ok(balance) = u64::try_from(balance_i64) else {
             return Err(DBError::Corruption.into());
         };
         Ok(balance)
+    }
+    
+    /// Get the unexpired balance of a user, who may own many different UTXOs with different
+    /// scriptpubkeys (since they'll all be p2wsh scriptpubkeys that commit to different code
+    /// hashes and thus different witness scripts)
+    pub fn get_user_balance(&self, user_p2wpkh: &Script, cur_bitcoin_height: u64) -> Result<u64, Error> {
+        let cur_bitcoin_height_i64 = i64::try_from(cur_bitcoin_height).map_err(|_| Error::Overflow)?;
+        let user_p2wpkh_bytes = user_p2wpkh.to_bytes();
+        let balance_i64 = query_int(&self.conn,
+            "SELECT IFNULL(SUM(btc_outputs.amount),0)
+            FROM btc_outputs LEFT OUTER JOIN btc_inputs ON btc_outputs.txid = btc_inputs.prev_txid
+            WHERE btc_inputs.prev_txid IS NULL AND btc_outputs.user_p2wpkh = ?1 AND ?2 < btc_outputs.expiry",
+            params![&user_p2wpkh_bytes, cur_bitcoin_height_i64])?;
+        let Ok(balance) = u64::try_from(balance_i64) else {
+            return Err(DBError::Corruption.into());
+        };
+        Ok(balance)
+    }
+
+    fn read_utxos_and_witness_scripts<P>(&self, sql: &str, args: P) -> Result<(UTXOSet, Vec<Script>), Error>
+    where
+        P: IntoIterator + rusqlite::Params,
+        P::Item: ToSql
+    {
+        let mut stmt = self.conn.prepare(sql)?;
+        let mut rows = stmt.query(args)?;
+        let mut utxos = vec![];
+        let mut witness_scripts = vec![];
+        while let Some(row) = rows.next()? {
+            // HACK: ToSql isn't implemented for DoubleSha256, so load it as a TXID and convert
+            let txid : Txid = row.get("txid")?;
+            let txid = DoubleSha256(txid.0);
+            let vout : u32 = row.get("vout")?;
+            let script_pubkey_bytes : Vec<u8> = row.get("script_pubkey")?;
+            let script_pub_key = Script::from(script_pubkey_bytes);
+            let witness_script_bytes : Vec<u8> = row.get("witness_script")?;
+            let witness_script = Script::from(witness_script_bytes);
+            let amount_i64 : i64 = row.get("amount")?;
+            let amount = u64::try_from(amount_i64).map_err(|_| Error::DBError(DBError::Corruption))?;
+            
+            utxos.push(UTXO {
+                txid,
+                vout,
+                script_pub_key,
+                amount,
+                confirmations: 0
+            });
+            witness_scripts.push(witness_script);
+        }
+        Ok((UTXOSet::new(utxos), witness_scripts))
+    }
+
+    /// Get the UTXOSet spendable by a given user, given the user's p2wpkh.
+    /// In addition to each UTXO loaded, obtain its corresponding witness script.
+    /// TODO: paginate
+    pub fn get_user_utxos_and_witness_scripts(&self, user_p2wpkh: &Script, cur_bitcoin_height: u64) -> Result<(UTXOSet, Vec<Script>), Error> {
+        let cur_bitcoin_height_i64 = i64::try_from(cur_bitcoin_height).map_err(|_| Error::Overflow)?;
+        let user_p2wpkh_bytes = user_p2wpkh.to_bytes();
+        let sql =
+            "SELECT txid, vout, script_pubkey, amount, witness_script
+            FROM btc_outputs LEFT OUTER JOIN btc_inputs ON btc_outputs.txid = btc_inputs.prev_txid
+            WHERE btc_inputs.prev_txid IS NULL AND user_p2wpkh = ?1 AND ?2 < expiry";
+        let args = params![&user_p2wpkh_bytes, cur_bitcoin_height_i64];
+        self.read_utxos_and_witness_scripts(sql, args)
     }
 }
 
@@ -363,20 +428,40 @@ impl<'a> DagTx<'a> {
         Ok(self.tx.commit()?)
     }
 
-    /// Store a transaction with a Bitcoin peg-in
-    /// Only store the inputs and outputs that are meaningful (`retain_ins` and
-    /// `retain_outs_and_metadata`)
-    fn inner_store_bitcoin_tx(&self, round_id: u64, tx: &BtcTransaction, retain_ins: &[usize], retain_outs_and_metadata: &[(usize, u64, &Sha512Trunc256Sum)]) -> Result<(), Error> {
+    /// Store a transaction with one or more UTXOs which pegin or transfer.
+    /// Match each UTXO in tx to its witness script and expiry.
+    /// Only outputs with matching witness scripts will be stored to form UTXOSets
+    fn store_bitcoin_offchain_transaction(&self, tx: &BtcTransaction, retain_ins: &[usize], num_cosigner_keys: u8, cosigner_threshold: u8, witness_scripts: &[(Script, u32)]) -> Result<(), Error> {
         let txid = tx.txid();
         let wtxid = tx.wtxid();
-        let round_id = i64::try_from(round_id).map_err(|_| Error::Overflow)?;
         let tx_bytes = btc_serialize(tx)?;
 
-        let in_set : HashSet<_> = retain_ins.iter().map(|i| *i).collect();
-        let out_map : HashMap<_, _> = retain_outs_and_metadata.iter().map(|(i, exp, code_hash)| (*i, (*exp, code_hash))).collect();
-        self.tx.execute("INSERT OR REPLACE INTO btc_transactions (txid, wtxid, round_id, body) VALUES (?1, ?2, ?3, ?4)",
-                        params![&txid, &wtxid, &round_id, &tx_bytes])?;
+        // map witness p2wsh scriptpubkey to its metadata
+        let p2wsh_to_metadata : HashMap<_, _> = witness_scripts
+            .iter()
+            .filter_map(|(witness_script, utxo_expiry)| {
+                let witness_data = witness::WitnessData::try_from_witness_script(witness_script, num_cosigner_keys, cosigner_threshold, *utxo_expiry)?;
+                Some((witness_script.to_v0_p2wsh(), witness_data))
+            })
+            .collect();
 
+        let in_set : HashSet<_> = retain_ins.iter().map(|i| *i).collect();
+
+        // match tx output indexes to their witness metadata
+        let out_map : HashMap<_, _> = tx.output
+            .iter()
+            .enumerate()
+            .filter_map(|(i, output)| {
+                let metadata = p2wsh_to_metadata.get(&output.script_pubkey)?;
+                Some((i, metadata))
+            })
+            .collect();
+        
+        // store transaction
+        self.tx.execute("INSERT OR REPLACE INTO btc_transactions (txid, wtxid, body) VALUES (?1, ?2, ?3)",
+                        params![&txid, &wtxid, &tx_bytes])?;
+
+        // store inputs
         for (i, inp) in tx.input.iter().enumerate() {
             if !in_set.contains(&i) {
                 continue;
@@ -386,76 +471,76 @@ impl<'a> DagTx<'a> {
                             params![&inp.script_sig.to_bytes(), &witness_sip003, &txid, &inp.previous_output.txid, &inp.previous_output.vout, i, inp.sequence])?;
         }
 
+        // store outputs
         for (i, out) in tx.output.iter().enumerate() {
-            let Some((expiry, code_hash)) = out_map.get(&i) else {
+            let Some(witness_data) = out_map.get(&i) else {
                 continue;
             };
-            let expiry_i64 = i64::try_from(*expiry).map_err(|_| Error::Overflow)?;
             let value_i64 = i64::try_from(out.value).map_err(|_| Error::Overflow)?;
-            self.tx.execute("INSERT OR REPLACE INTO btc_outputs (script_pubkey, amount, txid, vout, expiry, code_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                            params![&out.script_pubkey.to_bytes(), &value_i64, &txid, &i, &expiry_i64, code_hash])?;
+            self.tx.execute("INSERT OR REPLACE INTO btc_outputs (script_pubkey, amount, txid, vout, expiry, user_pubkey, user_p2wpkh, witness_script) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                            params![&out.script_pubkey.to_bytes(), &value_i64, &txid, &i, &witness_data.expiry, &witness_data.user_public_key.to_bytes(), &witness_data.user_p2wpkh().to_bytes(), &witness_data.witness_script.to_bytes()])?;
         }
         Ok(())
     }
-
-    /// Store a peg-in or transfer transaction with one or more UTXOs which pegin or transfer.
-    /// Match each UTXO in tx to its witness script, and extract the expiry and code hash
-    /// from the witness script.
-    pub fn store_bitcoin_offchain_transaction(&self, round_id: u64, tx: &BtcTransaction, num_cosigner_keys: u8, cosigner_threshold: u8, witness_scripts: &[Script]) -> Result<(), Error> {
-        let p2wsh_to_script : HashMap<_, _> = witness_scripts
-            .iter()
-            .map(|witness_script| (witness_script.to_v0_p2wsh(), witness_script))
-            .collect();
-
-        let p2wsh_to_metadata : HashMap<_, _> = witness_scripts
-            .iter()
-            .filter_map(|witness_script| {
-                let Some(unlock_height) = witness::unlock_height(witness_script, num_cosigner_keys, cosigner_threshold) else {
-                    return None;
-                };
-                let Some(code_hash) = witness::code_hash(witness_script, num_cosigner_keys, cosigner_threshold) else {
-                    return None;
-                };
-                Some((witness_script.to_v0_p2wsh(), (unlock_height, code_hash)))
-            })
-            .collect();
-
-        let retain_outs_and_metadata : Vec<(_, _, _)> = tx.output
-            .iter()
-            .enumerate()
-            .filter_map(|(i, output)| {
-                let Some(_script) = p2wsh_to_script.get(&output.script_pubkey) else {
-                    return None;
-                };
-                let Some((expiry, code_hash)) = p2wsh_to_metadata.get(&output.script_pubkey) else {
-                    return None;
-                };
-                Some((i, *expiry, code_hash))
-            })
-            .collect();
-
-        // determine peg-out expiries
-        self.inner_store_bitcoin_tx(round_id, tx, &[], &retain_outs_and_metadata)
-    }
     
-    /// Store an on-chain pegin transaction
-    pub fn store_bitcoin_pegin_transaction(&self, round_id: u64, tx: &BtcTransaction, num_cosigner_keys: u8, cosigner_threshold: u8, pegin_witness_scripts: &[Script]) -> Result<(), Error> {
-        self.store_bitcoin_offchain_transaction(round_id, tx, num_cosigner_keys, cosigner_threshold, pegin_witness_scripts)
+    /// Store an on-chain pegin transaction.
+    /// No transaction inputs will be retained.
+    /// Only outputs with pegin p2wsh scriptPubKeys will be retained; they must correspond to the
+    /// given list of pegin witness scripts.
+    ///
+    /// TODO: have the cosigner check that each input to a pegin it will cosign does NOT have an
+    /// unexpired output in the DB!
+    pub fn store_bitcoin_pegin_transaction(&self, tx: &BtcTransaction, num_cosigner_keys: u8, cosigner_threshold: u8, pegin_witness_scripts: &[Script]) -> Result<(), Error> {
+        // no inputs will be retained for a peg-in.
+        let mut pegin_witness_scripts_and_expiries = vec![];
+        for witness_script in pegin_witness_scripts.iter() {
+            let Some(expiry) = witness::get_pegin_unlock_height(witness_script) else {
+                return Err(Error::InvalidPeginWitness(witness_script.clone()));
+            };
+            pegin_witness_scripts_and_expiries.push((witness_script.clone(), expiry));
+        }
+
+        self.store_bitcoin_offchain_transaction(tx, &[], num_cosigner_keys, cosigner_threshold, &pegin_witness_scripts_and_expiries)
     }
 
     /// Store an off-chain transfer transaction
     /// All inputs must match existing outputs.
-    /// All outputs retained must have witness scripts
-    pub fn store_bitcoin_transfer_transaction(&self, round_id: u64, tx: &BtcTransaction, num_cosigner_keys: u8, cosigner_threshold: u8, witness_scripts: &[Script]) -> Result<(), Error> {
+    /// All outputs retained must have witness scripts given in `witness_scripts` -- they can be
+    /// pegin witnesses or transfer witnesses.
+    pub fn store_bitcoin_transfer_transaction(&self, tx: &BtcTransaction, num_cosigner_keys: u8, cosigner_threshold: u8, witness_scripts: &[Script]) -> Result<(), Error> {
         let conn = self.conn(); 
-        // funds expire when the last-expiring UTXO expires
+
+        // find the earliest expiry of each input of this transaction
+        let mut input_expiry = u32::MAX;
         for inp in tx.input.iter() {
             // each input must consume an offchain UTXO
-            if conn.get_utxo_expiry(&inp.previous_output.txid, inp.previous_output.vout)?.is_none() {
+            // TODO: exclude the cancellation input, once it is developed
+            let Some(utxo_expiry) = conn.get_utxo_expiry(&inp.previous_output.txid, inp.previous_output.vout)? else {
                 // UTXO doesn't exist
                 return Err(Error::MissingUTXO);
-            }
+            };
+            input_expiry = input_expiry.min(utxo_expiry);
         }
-        self.store_bitcoin_offchain_transaction(round_id, tx, num_cosigner_keys, cosigner_threshold, witness_scripts)
+
+        // Find the expiry for each witness.
+        // The witness could be a pegin witness, or a transfer witness.
+        // A pegin witness encodes its expiry -- it's the locktime.
+        // A transfer witness inherits earliest expiry of each input this transaction spends.
+        let mut witnesses_and_expiries = vec![];
+        for witness in witness_scripts.iter() {
+            let expiry = if let Some(expiry) = witness::get_pegin_unlock_height(witness) {
+                // pegin witness
+                expiry
+            }
+            else {
+                // transfer witness -- inherits earliest expiry of each pegin or transfer UTXO this
+                // transaction consumes
+                input_expiry
+            };
+            witnesses_and_expiries.push((witness.clone(), expiry));
+        }
+
+        let inp_range : Vec<_> = (0..tx.input.len()).collect();
+        self.store_bitcoin_offchain_transaction(tx, &inp_range, num_cosigner_keys, cosigner_threshold, &witnesses_and_expiries)
     }
 }

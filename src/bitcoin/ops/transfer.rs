@@ -35,25 +35,25 @@ use crate::bitcoin::wallet::{UTXO, UTXOSet, DUST_UTXO_LIMIT};
 use crate::bitcoin::ops::{M2Ops, M2Marker, M2PegIn, witness};
 
 pub struct M2Transfer {
-    locktime: u32,
+    safety_margin: u32,
     user_pubkey: Secp256k1PublicKey,
     user_signature_witness: Vec<u8>,    // one user signature for now
     cosigner_pubkeys: Vec<Secp256k1PublicKey>,
     cosigner_threshold: u8,
     cosigner_signature_witness: Vec<Vec<u8>>,
-    code_hash: Sha512Trunc256Sum,
+    payload: Vec<u8>
 }
 
 impl M2Transfer {
-    pub fn new(locktime: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], cosigner_threshold: u8, code_hash: Sha512Trunc256Sum) -> Self {
+    pub fn new(safety_margin: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], cosigner_threshold: u8, payload: Vec<u8>) -> Self {
         Self {
-            locktime,
+            safety_margin,
             user_pubkey: user_pubkey.clone(),
             user_signature_witness: vec![],
             cosigner_pubkeys: cosigner_pubkeys.to_vec(),
             cosigner_threshold,
             cosigner_signature_witness: vec![],
-            code_hash,
+            payload
         }
     }
 
@@ -62,15 +62,15 @@ impl M2Transfer {
     }
 
     pub fn make_witness_script(&self) -> Script {
-        witness::make_witness_script_for_op(M2Ops::Transfer, &self.user_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, &self.code_hash, self.locktime)
+        witness::make_witness_script_for_transfer(&self.user_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, self.payload.clone(), self.safety_margin)
     }
 
-    pub fn make_recipient_witness_script(&self, recipient_pubkey: &Secp256k1PublicKey, recipient_code_hash: &Sha512Trunc256Sum) -> Script {
-        witness::make_witness_script_for_op(M2Ops::Transfer, recipient_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, recipient_code_hash, self.locktime)
+    pub fn make_recipient_witness_script(&self, recipient_pubkey: &Secp256k1PublicKey, recipient_payload: Vec<u8>) -> Script {
+        witness::make_witness_script_for_transfer(recipient_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, recipient_payload, self.safety_margin)
     }
 
-    pub fn make_recipient_script_pubkey(&self, recipient_pubkey: &Secp256k1PublicKey, recipient_code_hash: &Sha512Trunc256Sum) -> Script {
-        let prog = self.make_recipient_witness_script(recipient_pubkey, recipient_code_hash);
+    pub fn make_recipient_script_pubkey(&self, recipient_pubkey: &Secp256k1PublicKey, recipient_payload: Vec<u8>) -> Script {
+        let prog = self.make_recipient_witness_script(recipient_pubkey, recipient_payload);
         prog.to_v0_p2wsh()
     }
 
@@ -79,12 +79,27 @@ impl M2Transfer {
         prog.to_v0_p2wsh()
     }
 
-    pub fn make_transfer_spend_txin(&self, utxo: &UTXO) -> TxIn {
-        witness::make_txin_from_witness_script(utxo, &self.make_witness_script())
+    pub fn make_transfer_spend_txin(utxo: &UTXO, witness_script: &Script, safety_margin: u32) -> TxIn {
+        let witness : Vec<Vec<u8>> = witness::make_initial_witness_stack_from_script(&witness_script)
+            .into_iter()
+            .map(|s| s.to_bytes())
+            .collect();
+
+        let input = TxIn {
+            previous_output: OutPoint {
+                txid: Sha256dHash(utxo.txid.clone().0),
+                vout: utxo.vout
+            },
+            script_sig: Script::new(),
+            sequence: safety_margin,
+            witness,
+        };
+        input
     }
 
     /// Create an unsigned mach2 transfer spending transaction, which consumes some or all of the `utxo_set`.
-    /// Spends p2wsh UTXOs from previous transfers and peg-ins.
+    /// Spends p2wsh UTXOs in `utxos_set` whose script_pub_keys either match the user's script
+    /// pubkey (a p2wsh) or one of the p2wsh script pubkeys derived from `pegin_witness_scripts`
     ///
     /// Returns Some(tx) on success, and reduces `utxos_set` to the UTXOs which will be consumed
     /// Returns None on error, and leaves `utxos_set` unchanged.
@@ -116,6 +131,7 @@ impl M2Transfer {
 
         for utxo in available_utxos.into_iter() {
             if !pegin_p2wshs.contains_key(&utxo.script_pub_key) && utxo.script_pub_key != user_p2wsh {
+                m2_test_debug!("Skip {}", &utxo.script_pub_key);
                 continue;
             }
             total_consumed += utxo.amount;
@@ -139,7 +155,7 @@ impl M2Transfer {
         );
 
         let mut tx = Transaction {
-            version: 1,
+            version: 2,
             lock_time: 0,
             input: vec![],
             output: vec![TxOut {
@@ -161,11 +177,11 @@ impl M2Transfer {
         for utxo in utxos_set.utxos.iter() {
             let input = if let Some(pegin_witness_script) = pegin_p2wshs.get(&utxo.script_pub_key) {
                 // spending a previously-locked peg-in 
-                witness::make_txin_from_witness_script(utxo, pegin_witness_script)
+                M2PegIn::make_pegin_spend_txin(utxo, pegin_witness_script)
             }
             else if utxo.script_pub_key == user_p2wsh {
                 // spending a previous transfer UTXO
-                self.make_transfer_spend_txin(utxo)
+                Self::make_transfer_spend_txin(utxo, &self.make_witness_script(), self.safety_margin)
             }
             else {
                 continue;
@@ -214,11 +230,10 @@ impl M2Transfer {
             .map(|s| (s.to_v0_p2wsh(), s))
             .collect();
 
-        tx.lock_time = self.locktime;
         for (i, utxo) in utxos_set.utxos.iter().enumerate() {
             let sig_hash_all = 0x01;
             let sig_hash = if utxo.script_pub_key == user_p2wsh {
-                // spending a transfer UTXO for this user and code hash
+                // spending a transfer UTXO for this user
                 tx.segwit_signature_hash(i, &self.make_witness_script(), utxo.amount, sig_hash_all)
             }
             else if let Some(pegin_witness_script) = pegin_p2wshs.get(&utxo.script_pub_key) {

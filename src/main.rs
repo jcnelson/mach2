@@ -47,7 +47,6 @@ pub mod net;
 pub mod storage;
 #[cfg(test)]
 pub mod tests;
-pub mod vm;
 
 use std::env;
 use std::process;

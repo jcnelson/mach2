@@ -13,79 +13,43 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::error;
 use std::fmt;
 
-use crate::vm::storage::M2HeadersDB;
-use clarity::vm::analysis::AnalysisDatabase;
-use clarity::vm::database::BurnStateDB;
-use clarity::vm::database::ClarityDatabase;
-use clarity::vm::database::HeadersDB;
+use clarity::{
+    vm::ast,
+    vm::costs::LimitedCostTracker,
+    vm::types::QualifiedContractIdentifier,
+};
+use clarity::vm::ClarityVersion;
+use clarity::vm::ContractContext;
+use clarity::vm::database::MemoryBackingStore;
+use clarity::vm::contexts::GlobalContext;
+use clarity::vm::eval_all;
+use clarity::vm::types::Value;
+use clarity::vm::errors::Error as clarity_error;
 
-use stacks_common::types::chainstate::StacksBlockId;
 use stacks_common::types::StacksEpochId;
 use stacks_common::consts::CHAIN_ID_MAINNET;
 
-use clarity::boot_util::boot_code_addr;
-use clarity::vm::errors::Error as clarity_error;
-use clarity::vm::types::QualifiedContractIdentifier;
-use clarity::vm::ContractName;
-use clarity::vm::ClarityVersion;
-
-use crate::vm::storage::Error as DBError;
-use crate::vm::storage::M2DB;
-
-pub const STACKS_M2_EPOCH: StacksEpochId = StacksEpochId::Epoch33;
-
-pub mod clarity_vm;
-pub mod contracts;
-pub mod special;
-pub mod storage;
-
-pub use contracts::m2_link_app;
-
-#[cfg(test)]
-pub mod tests;
-
 pub const DEFAULT_M2_EPOCH: StacksEpochId = StacksEpochId::Epoch33;
-pub const DEFAULT_M2_CLARITY_VERSION: ClarityVersion = ClarityVersion::Clarity4;
 pub const DEFAULT_CHAIN_ID: u32 = CHAIN_ID_MAINNET;
-
-pub trait ClarityStorage {
-    fn get_clarity_db<'a>(
-        &'a mut self,
-        headers_db: &'a dyn HeadersDB,
-        burn_db: &'a dyn BurnStateDB,
-    ) -> ClarityDatabase<'a>;
-    fn get_analysis_db<'a>(&'a mut self) -> AnalysisDatabase<'a>;
-}
-
-pub struct ClarityVM {
-    db: M2DB,
-}
 
 #[derive(Debug)]
 pub enum Error {
-    DB(DBError),
     Clarity(String),
     InvalidInput(String),
     NotInitialized,
+    ContractAlreadyExists,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Error::DB(ref e) => write!(f, "DB: {:?}", &e),
             Error::Clarity(ref e) => write!(f, "Clarity: {}", &e),
             Error::InvalidInput(ref e) => write!(f, "Invalid input: {}", &e),
             Error::NotInitialized => write!(f, "System not initialized"),
+            Error::ContractAlreadyExists => write!(f, "Contract already exists"),
         }
-    }
-}
-
-impl From<DBError> for Error {
-    fn from(e: DBError) -> Self {
-        Self::DB(e)
     }
 }
 
@@ -95,6 +59,28 @@ impl From<clarity_error> for Error {
     }
 }
 
-pub const BOOT_BLOCK_ID: StacksBlockId = StacksBlockId([0xff; 32]);
-pub const GENESIS_BLOCK_ID: StacksBlockId = StacksBlockId([0x00; 32]);
-
+/// Execute program in a transient environment.
+pub fn vm_execute(program: &str, clarity_version: ClarityVersion) -> Result<Option<Value>, Error> {
+    let contract_id = QualifiedContractIdentifier::transient();
+    let mut contract_context = ContractContext::new(contract_id.clone(), clarity_version);
+    let mut marf = MemoryBackingStore::new();
+    let conn = marf.as_clarity_db();
+    let mut global_context = GlobalContext::new(
+        true,
+        DEFAULT_CHAIN_ID,
+        conn,
+        LimitedCostTracker::new_free(),
+        DEFAULT_M2_EPOCH,
+    );
+    Ok(global_context.execute(|g| {
+        let parsed = ast::build_ast(
+            &contract_id,
+            program,
+            &mut (),
+            clarity_version,
+            DEFAULT_M2_EPOCH,
+        )?
+        .expressions;
+        eval_all(&parsed, &mut contract_context, g, None)
+    })?)
+}

@@ -2,9 +2,9 @@
 
 Mach2 is a prototype system for building self-custodial Bitcoin DeFi systems on
 Stacks.  BTC providers lock their BTC on-chain for a certain period of time, and while
-it is locked, they work within Mach2 to instantiate a wrapped "M2BTC" token
+it is locked, they use Mach2 to instantiate a wrapped "M2BTC" token
 which is backed by pre-signed, post-dated Bitcoin transactions.  As users
-transfer M2BTC in Mach2, they append new transactions to a directed
+transfer M2BTC on Stacks, they append new transactions to a directed
 acyclic graph (DAG) of off-chain Bitcoin transactions rooted at one or more BTC
 provider lock-up transactions.  If the BTC provider opts not to extend their
 lock time, then the DAG becomes mineable, and all M2BTC holders receive their
@@ -30,11 +30,8 @@ More information will be provided as it becomes available.
 - [ ] Clarity smart contract for instantiating StackerDBs for Mach2
   communication between users and the Mach2 cosigner.
 - [X] Off-chain DAG database for BTC
-- [ ] Off-chain DAG database for wrapped Stacks assets
-- [ ] Mach2 smart contract for locking Stacks assets
 - [ ] 2-phase commit cosigner for cosigning DAG transactions
 - [ ] CLI app for spending M2BTC between Mach2 users by appending DAG transactions
-- [ ] Instrumented Clarity VM with M2BTC keywords for transferring M2BTC, escrowing
   M2BTC, and querying M2BTC balances at given Bitcoin heights
 - [ ] Simple lending app on Mach2
 - [ ] Simple AMM on Mach2
