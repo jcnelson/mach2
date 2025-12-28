@@ -278,6 +278,11 @@ impl M2Transfer {
             }
             else if let Some(pegin_witness_script) = pegin_p2wshs.get(&utxo.script_pub_key) {
                 // spending a pegin UTXO
+                if tx.lock_time == 0 {
+                    m2_warn!("Cannot spend a pegin UTXO without a positive locktime");
+                    return false;
+                }
+
                 if is_cosigner {
                     if null_cosigner {
                         m2_debug!("Null cosigner signs for transfer {}: {}", &to_hex(&user_p2wsh.to_bytes()), &sig1_der);

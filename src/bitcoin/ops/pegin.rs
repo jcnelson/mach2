@@ -402,6 +402,10 @@ impl M2PegIn {
             }
             else if utxo.script_pub_key == prev_pegin_p2wsh && (is_cosigner || self.is_user_signer(signer)) {
                 // spending the pegin witness script
+                if tx.lock_time == 0 {
+                    m2_warn!("Cannot spend a pegin UTXO without a positive locktime");
+                    return false;
+                }
                 tx.segwit_signature_hash(i, &witness_script, utxo.amount, sig_hash_all)
             }
             else {
@@ -442,7 +446,13 @@ impl M2PegIn {
             else if utxo.script_pub_key == prev_pegin_p2wsh && (is_cosigner || self.is_user_signer(signer)) {
                 tx.input[i].script_sig = Script::from(vec![]);
 
-                // spending a pegin.  Is the signer the user, or cosigner?
+                // spending a pegin
+                if tx.lock_time == 0 {
+                    m2_warn!("Cannot spend a pegin UTXO without a positive locktime");
+                    return false;
+                }
+
+                // Is the signer the user, or cosigner?
                 if is_cosigner {
                     if null_cosigner {
                         // user is reclaiming locked BTC without the cosigner, so push a
