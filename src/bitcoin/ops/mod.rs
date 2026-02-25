@@ -164,6 +164,21 @@ pub mod witness {
     /// OP_ENDIF
     ///
     /// <marker> is M2Ops-byte + Stacks address of recipient
+    ///
+    /// <stacks-principal-recipient> OP_DROP
+    /// <cosigner-compression-multisig-script> OP_0NOTEQUAL
+    /// OP_NOTIF
+    ///    <cosigner-dag-signing-multisig-script> OP_0NOTEQUAL
+    ///    OP_IF
+    ///       <locktime - safety-margin> OP_CHECKLOCKTIMEVERIFY
+    ///    OP_ELSE
+    ///       <locktime> OP_CHECKLOCKTIMEVERIFY
+    ///    OP_ENDIF
+    /// OP_ENDIF
+    /// <user-spending-script>
+    ///
+    /// <locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP
+    ///
     pub fn make_witness_script_for_pegin(user_pubkey: &Secp256k1PublicKey, cosigner_threshold: u8, cosigner_pubkeys: &[Secp256k1PublicKey], recipient_stacks_address: &StacksAddress, locktime: u32, safety_margin: u32) -> Script {
         let marker = M2Marker(M2Ops::PegIn, recipient_stacks_address.to_pushdata().to_vec());
         let reclaim_locktime = locktime + safety_margin;
@@ -211,6 +226,13 @@ pub mod witness {
     /// OP_ELSE
     ///    <safety-margin> OP_CHECKSEQUENCEVERIFY
     /// OP_ENDIF
+    ///
+    /// <marker> OP_DROP
+    /// <cosigner-dag-signing-multisig-script> OP_0NOTEQUAL
+    /// OP_NOTIF
+    ///     <safety-margin> OP_CSV
+    /// OP_ENDIF
+    /// <user-script>
     ///
     /// <marker> is M2Ops-byte + whatever the smart contract or sender wanted as a memo
     pub fn make_witness_script_for_transfer(user_pubkey: &Secp256k1PublicKey, cosigner_threshold: u8, cosigner_pubkeys: &[Secp256k1PublicKey], op_payload: Vec<u8>, safety_margin: u32) -> Script {

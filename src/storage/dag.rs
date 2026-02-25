@@ -477,7 +477,7 @@ impl<'a> DagTx<'a> {
                 continue;
             };
             let value_i64 = i64::try_from(out.value).map_err(|_| Error::Overflow)?;
-            self.tx.execute("INSERT OR REPLACE INTO btc_outputs (script_pubkey, amount, txid, vout, expiry, user_pubkey, user_p2wpkh, witness_script) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            self.tx.execute("INSERT OR REPLACE INTO btc_outputs (script_pubkey, amount, txid, vout, expiry, user_pubkey, user_p2wpkh, witness_script) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                             params![&out.script_pubkey.to_bytes(), &value_i64, &txid, &i, &witness_data.expiry, &witness_data.user_public_key.to_bytes(), &witness_data.user_p2wpkh().to_bytes(), &witness_data.witness_script.to_bytes()])?;
         }
         Ok(())
