@@ -125,7 +125,9 @@
             (concat (fold make-multisig-script-iter dag-keys OP_8) OP_11_OP_CHECKMULTISIG))
     )
 
-    (asserts! (map-insert cosigner-addr {
+    (asserts! (map-insert cosigner-info
+        cosigner-addr
+        {
             dag-spend-script: cosigner-dag-script,
             dag-keys: dag-keys,
         })
@@ -149,7 +151,7 @@
             outpoint: { hash: (buff 32), index: uint },
             scriptSig: (buff 1376),
             sequence: uint,
-            witness (list 13 (buff 1376)),
+            witness: (list 13 (buff 1376)),
         }),
         outs: (list 50 {
             value: uint,
@@ -249,7 +251,7 @@
     (ok true)))
 
 (define-read-only (balance-adder
-    (balance-item { provider: principal, amount: uint, expires })
+    (balance-item { provider: principal, amount: uint, expires: uint })
     (ctx { btc-block-height: uint, sum: uint }))
 
     (if (< (get expires balance-item) (get btc-block-height ctx))
@@ -338,7 +340,7 @@
     (anyone-can-pay bool))
     
     ;; anyone-can-pay, or sighash-none, or sighash-single
-    (if (or anyone-can-pay (is-eq sgihash-type SIGHASH_NONE) (is-eq sighash-type SIGHASH_SINGLE)))
+    (if (or anyone-can-pay (is-eq sgihash-type SIGHASH_NONE) (is-eq sighash-type SIGHASH_SINGLE))
         ;; per BIP-143, this is all 0's
         0x0000000000000000000000000000000000000000000000000000000000000000
         ;; sha256d of the concatenation of the nSequences
@@ -490,7 +492,7 @@
         (let (
             (result (fold check-pubkey-on-sig-iter
                 (get keys ctx)
-                { sig: witness-sig, siganture-hash (get signature-hash ctx), found: false, valid: true, i: u0 }))
+                { sig: witness-sig, siganture-hash: (get signature-hash ctx), found: false, valid: true, i: u0 }))
         )
         (if (or (not (get found result)) (not (get valid result)))
             ;; failed
@@ -514,7 +516,7 @@
             outpoint: { hash: (buff 32), index: uint },
             scriptSig: (buff 1376),
             sequence: uint,
-            witness (list 13 (buff 1376)),
+            witness: (list 13 (buff 1376)),
         }),
         outs: (list 50 {
             value: uint,
@@ -623,7 +625,7 @@
     (asserts! (get valid user-dag-sig-check)
         (err ERR_TX_INVALID_USER_SIGNATURE))
 
-    (ok (some (merge utxo { pointer: utxo-pointer })))
+    (ok (some (merge utxo { pointer: utxo-pointer })))))
 
 ;; Check that a given input in txdata has been signed by the cosigner DAG keys and the user key
 ;; obtained from the input's corresponding UTXO.  Check also that the input is well-formed -- i.e.
@@ -635,7 +637,7 @@
             outpoint: { hash: (buff 32), index: uint },
             scriptSig: (buff 1376),
             sequence: uint,
-            witness (list 13 (buff 1376)),
+            witness: (list 13 (buff 1376)),
         }),
         outs: (list 50 {
             value: uint,
@@ -685,7 +687,7 @@
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
         sequence: uint,
-        witness (list 13 (buff 1376)),
+        witness: (list 13 (buff 1376)),
     }))
     (outs (list 50 {
         value: uint,
@@ -989,7 +991,7 @@
             OP_ENDIF))))
 
     )
-    (ok (concat recipient-to-cosigner cosigner-to-end))
+    (ok (concat recipient-to-cosigner cosigner-to-end)))))
  
 ;; Last failure for contract-call to pasre-wtx
 (define-data-var last-btc-decode-error uint u0)
@@ -1156,7 +1158,7 @@
         user-pubkey: (buff 33),
         locktime: uint,
         safety-margin: uint
-    })
+    }))
 
     (let (
         (recipient-principal (get recipient-principal witness-data))
@@ -1221,7 +1223,6 @@
     ;; store peg-in tx in DAG
     ;; (append-dag-pegin wtxid recipient-principal amount cur-btc-height)
     (ok true))))
-
 
 ;; Carry out a peg-in on an already-stored authenticated witness transaction.
 ;; Called only by the cosigner.
