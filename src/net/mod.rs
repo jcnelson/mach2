@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use rusqlite::Error as RusqliteError;
 
 use clarity_types::types::{QualifiedContractIdentifier};
-
+use clarity_types::types::serialization::SerializationError;
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::BurnchainHeaderHash;
 use stacks_common::types::chainstate::SortitionId;
@@ -51,8 +51,8 @@ use crate::util::sqlite::Error as DBError;
 
 use stacks_common::codec::Error as CodecError;
 
-use clarity_types::errors::InterpreterError as ClarityInterpreterError;
-use clarity_types::Error as ClarityError;
+use clarity::vm::errors::ClarityEvalError;
+use clarity::vm::errors::ClarityTypeError;
 
 pub use http::run_http_request;
 
@@ -74,116 +74,20 @@ pub enum Error {
     OverflowError(String),
     /// Catch-all I/O error
     IO(io::Error),
-    /// Wrong protocol family
-    WrongProtocolFamily,
     /// Array is too big
     ArrayTooLong,
-    /// Receive timed out
-    RecvTimeout,
     /// Error signing a message
     SigningError(String),
     /// Error verifying a message
     VerifyingError(String),
-    /// Read stream is drained.  Try again
-    TemporarilyDrained,
-    /// Read stream has reached EOF (socket closed, end-of-file reached, etc.)
-    PermanentlyDrained,
-    /// Failed to read from the FS
-    FilesystemError,
-    /// Socket mutex was poisoned
-    SocketMutexPoisoned,
-    /// Socket not instantiated
-    SocketNotConnectedToPeer,
-    /// Not connected to peer
-    ConnectionBroken,
-    /// Connection could not be (re-)established
-    ConnectionError,
-    /// Too many outgoing messages
-    OutboxOverflow,
-    /// Too many incoming messages
-    InboxOverflow,
-    /// Send error
-    SendError(String),
-    /// Recv error
-    RecvError(String),
     /// Invalid message
     InvalidMessage,
-    /// Invalid network handle
-    InvalidHandle,
-    /// Network handle is full
-    FullHandle,
-    /// Invalid handshake
-    InvalidHandshake,
-    /// Stale neighbor
-    StaleNeighbor,
-    /// No such neighbor
-    NoSuchNeighbor,
-    /// Failed to bind
-    BindError,
-    /// Failed to poll
-    PollError,
-    /// Failed to accept
-    AcceptError,
-    /// Failed to register socket with poller
-    RegisterError,
-    /// Failed to query socket metadata
-    SocketError,
     /// server is not bound to a socket
     NotConnected,
-    /// Remote peer is not connected
-    PeerNotConnected,
-    /// Too many peers
-    TooManyPeers,
-    /// Message already in progress
-    InProgress,
-    /// Peer is denied
-    Denied,
-    /// Data URL is not known
-    NoDataUrl,
-    /// Peer is transmitting too fast
-    PeerThrottled,
+    /// the requested StackerDB chunk does not exist
+    NoSuchChunk,
     /// Error resolving a DNS name
     LookupError(String),
-    /// Coordinator hung up
-    CoordinatorClosed,
-    /// view of state is stale (e.g. from the sortition db)
-    StaleView,
-    /// Tried to connect to myself
-    ConnectionCycle,
-    /// Requested data not found
-    NotFoundError,
-    /// Transient error (akin to EAGAIN)
-    Transient(String),
-    /// Expected end-of-stream, but had more data
-    ExpectedEndOfStream,
-    /// chunk is stale
-    StaleChunk {
-        supplied_version: u32,
-        latest_version: u32,
-    },
-    /// no such slot
-    NoSuchSlot(QualifiedContractIdentifier, u32),
-    /// no such DB
-    NoSuchStackerDB(QualifiedContractIdentifier),
-    /// stacker DB exists
-    StackerDBExists(QualifiedContractIdentifier),
-    /// slot signer is wrong
-    BadSlotSigner(StacksAddress, u32),
-    /// too many writes to a slot
-    TooManySlotWrites {
-        supplied_version: u32,
-        max_writes: u32,
-    },
-    /// too frequent writes to a slot
-    TooFrequentSlotWrites(u64),
-    /// Invalid control smart contract for a Stacker DB
-    InvalidStackerDBContract(QualifiedContractIdentifier, String),
-    /// state machine step took too long
-    StepTimeout,
-    /// stacker DB chunk is too big
-    StackerDBChunkTooBig(usize),
-    /// Invalid state machine state reached
-    InvalidState,
     /// Network request was bad
     MalformedRequest(String),
     /// Network respones was bad
@@ -194,18 +98,14 @@ pub enum Error {
     RPCError(String),
     /// DB error
     DBError(DBError),
-    /// Clarity Interpreter Error
-    ClarityInterpreterError(ClarityInterpreterError),
     /// Clarity top-level Error
-    ClarityError(ClarityError),
+    ClarityError(String),
     /// Local storage error
     StorageError(String),
     /// GetChunk error
     GetChunk(String),
     /// PutChunk error
     PutChunk(String),
-    /// no such chunk
-    NoSuchChunk,
     /// nod esession error
     SessionError(String),
 }
@@ -235,15 +135,15 @@ impl From<CodecError> for Error {
     }
 }
 
-impl From<ClarityInterpreterError> for Error {
-    fn from(e: ClarityInterpreterError) -> Self {
-        Self::ClarityInterpreterError(e)
+impl From<ClarityEvalError> for Error {
+    fn from(e: ClarityEvalError) -> Self {
+        Self::ClarityError(format!("Clarity eval error: {e:?}"))
     }
 }
 
-impl From<ClarityError> for Error {
-    fn from(e: ClarityError) -> Self {
-        Self::ClarityError(e)
+impl From<ClarityTypeError> for Error {
+    fn from(e: ClarityTypeError) -> Self {
+        Self::ClarityError(format!("Clarity type error: {e:?}"))
     }
 }
 
@@ -259,6 +159,12 @@ impl From<RusqliteError> for Error {
     }
 }
 
+impl From<SerializationError> for Error {
+    fn from(e: SerializationError) -> Self {
+        Self::SerializeError(format!("Clarity serialization error: {e:?}"))
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -269,109 +175,24 @@ impl fmt::Display for Error {
             Error::UnderflowError(ref s) => fmt::Display::fmt(s, f),
             Error::OverflowError(ref s) => fmt::Display::fmt(s, f),
             Error::IO(ref e) => fmt::Display::fmt(e, f),
-            Error::WrongProtocolFamily => write!(f, "Improper use of protocol family"),
             Error::ArrayTooLong => write!(f, "Array too long"),
-            Error::RecvTimeout => write!(f, "Packet receive timeout"),
             Error::SigningError(ref s) => fmt::Display::fmt(s, f),
             Error::VerifyingError(ref s) => fmt::Display::fmt(s, f),
-            Error::TemporarilyDrained => {
-                write!(f, "Temporarily out of bytes to read; try again later")
-            }
-            Error::PermanentlyDrained => write!(f, "Out of bytes to read"),
-            Error::FilesystemError => write!(f, "Disk I/O error"),
-            Error::SocketMutexPoisoned => write!(f, "socket mutex was poisoned"),
-            Error::SocketNotConnectedToPeer => write!(f, "not connected to peer"),
-            Error::ConnectionBroken => write!(f, "connection to peer node is broken"),
-            Error::ConnectionError => write!(f, "connection to peer could not be (re-)established"),
-            Error::OutboxOverflow => write!(f, "too many outgoing messages queued"),
-            Error::InboxOverflow => write!(f, "too many messages pending"),
-            Error::SendError(ref s) => fmt::Display::fmt(s, f),
-            Error::RecvError(ref s) => fmt::Display::fmt(s, f),
             Error::InvalidMessage => write!(f, "invalid message (malformed or bad signature)"),
-            Error::InvalidHandle => write!(f, "invalid network handle"),
-            Error::FullHandle => write!(f, "network handle is full and needs to be drained"),
-            Error::InvalidHandshake => write!(f, "invalid handshake from remote peer"),
-            Error::StaleNeighbor => write!(f, "neighbor is too far behind the chain tip"),
-            Error::NoSuchNeighbor => write!(f, "no such neighbor"),
-            Error::BindError => write!(f, "Failed to bind to the given address"),
-            Error::PollError => write!(f, "Failed to poll"),
-            Error::AcceptError => write!(f, "Failed to accept connection"),
-            Error::RegisterError => write!(f, "Failed to register socket with poller"),
-            Error::SocketError => write!(f, "Socket error"),
             Error::NotConnected => write!(f, "Not connected to peer network"),
-            Error::PeerNotConnected => write!(f, "Remote peer is not connected to us"),
-            Error::TooManyPeers => write!(f, "Too many peer connections open"),
-            Error::InProgress => write!(f, "Message already in progress"),
-            Error::Denied => write!(f, "Peer is denied"),
-            Error::NoDataUrl => write!(f, "No data URL available"),
-            Error::PeerThrottled => write!(f, "Peer is transmitting too fast"),
+            Error::NoSuchChunk => write!(f, "No such StackerDB chunk"),
             Error::LookupError(ref s) => fmt::Display::fmt(s, f),
-            Error::CoordinatorClosed => write!(f, "Coordinator hung up"),
-            Error::StaleView => write!(f, "State view is stale"),
-            Error::ConnectionCycle => write!(f, "Tried to connect to myself"),
-            Error::NotFoundError => write!(f, "Requested data not found"),
-            Error::Transient(ref s) => write!(f, "Transient network error: {}", s),
-            Error::ExpectedEndOfStream => write!(f, "Expected end-of-stream"),
-            Error::StaleChunk {
-                supplied_version,
-                latest_version,
-            } => {
-                write!(
-                    f,
-                    "Stale DB chunk (supplied={},latest={})",
-                    supplied_version, latest_version
-                )
-            }
-            Error::NoSuchSlot(ref addr, ref slot_id) => {
-                write!(f, "No such DB slot ({},{})", addr, slot_id)
-            }
-            Error::NoSuchStackerDB(ref addr) => {
-                write!(f, "No such StackerDB {}", addr)
-            }
-            Error::StackerDBExists(ref addr) => {
-                write!(f, "StackerDB already exists: {}", addr)
-            }
-            Error::BadSlotSigner(ref addr, ref slot_id) => {
-                write!(f, "Bad DB slot signer ({},{})", addr, slot_id)
-            }
-            Error::TooManySlotWrites {
-                supplied_version,
-                max_writes,
-            } => {
-                write!(
-                    f,
-                    "Too many slot writes (max={},given={})",
-                    max_writes, supplied_version
-                )
-            }
-            Error::TooFrequentSlotWrites(ref deadline) => {
-                write!(f, "Too frequent slot writes (deadline={})", deadline)
-            }
-            Error::InvalidStackerDBContract(ref contract_id, ref reason) => {
-                write!(
-                    f,
-                    "Invalid StackerDB control smart contract {}: {}",
-                    contract_id, reason
-                )
-            }
-            Error::StepTimeout => write!(f, "State-machine step took too long"),
-            Error::StackerDBChunkTooBig(ref sz) => {
-                write!(f, "StackerDB chunk size is too big ({})", sz)
-            }
-            Error::InvalidState => write!(f, "Invalid state-machine state reached"),
             Error::MalformedRequest(ref s) => write!(f, "Malformed request: {}", s),
             Error::MalformedResponse(ref s) => write!(f, "Malformed response: {}", s),
             Error::HttpError(ref code, ref _headers, ref _body_offset) => {
                 write!(f, "Bad HTTP code: {}", code)
             }
             Error::RPCError(ref msg) => write!(f, "RPC error: {}", msg),
-            Error::ClarityInterpreterError(ref e) => write!(f, "Clarity interpeter error: {:?}", e),
             Error::ClarityError(ref e) => write!(f, "Clarity error: {:?}", e),
             Error::DBError(ref e) => write!(f, "DB error: {}", e),
             Error::StorageError(ref s) => write!(f, "Storage error: {}", s),
             Error::GetChunk(ref s) => write!(f, "StackerDB get-chunk failed: {}", s),
             Error::PutChunk(ref s) => write!(f, "StackerDB put-chunk failed: {}", s),
-            Error::NoSuchChunk => write!(f, "No such StackerDB chunk"),
             Error::SessionError(ref s) => write!(f, "Node p2p session error: {}", s),
         }
     }

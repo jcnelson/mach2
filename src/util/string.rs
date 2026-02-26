@@ -21,7 +21,7 @@ use std::net::ToSocketAddrs;
 use std::ops::{Deref, DerefMut};
 use std::{fmt, io};
 
-use clarity_types::errors::RuntimeErrorType;
+use clarity::vm::errors::ClarityTypeError;
 use clarity_types::representations::{
     ClarityName, ContractName, SymbolicExpression, CONTRACT_MAX_NAME_LENGTH,
     CONTRACT_MIN_NAME_LENGTH, MAX_STRING_LEN as CLARITY_MAX_STRING_LENGTH,
@@ -48,11 +48,10 @@ lazy_static! {
 
 guarded_string!(
     UrlString,
-    "UrlString",
     URL_STRING_REGEX,
     CLARITY_MAX_STRING_LENGTH,
-    RuntimeErrorType,
-    RuntimeErrorType::BadNameValue
+    ClarityTypeError,
+    ClarityTypeError::InvalidUrlString
 );
 
 /// printable-ASCII-only string, but encodable.

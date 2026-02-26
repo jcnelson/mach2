@@ -49,18 +49,12 @@ use crate::bitcoin::rpc::{
 };
 
 use serde::{Serialize, Deserialize};
-use crate::bitcoin::MagicBytes;
 
 
 pub const DUST_UTXO_LIMIT: u64 = 5500;
 
-#[cfg(test)]
-// Used to inject invalid block commits during testing.
-pub static TEST_MAGIC_BYTES: std::sync::Mutex<Option<[u8; 2]>> = std::sync::Mutex::new(None);
-
 pub struct BitcoinClient {
     network_id: BitcoinNetworkType,
-    magic_bytes: MagicBytes,
     wallet_name: String,
     config: Config,
     rpc_client: BitcoinRpcClient,
@@ -135,7 +129,6 @@ impl BitcoinClient {
         let btc_config = config.get_bitcoin_config();
         Self {
             network_id: btc_config.network_id,
-            magic_bytes: btc_config.magic_bytes,
             wallet_name: btc_config.wallet_name,
             config,
             rpc_client,
@@ -290,19 +283,6 @@ impl BitcoinClient {
         }
 
         Some(utxos)
-    }
-
-    fn magic_bytes(&self) -> Vec<u8> {
-        #[cfg(test)]
-        {
-            if let Some(set_bytes) = *TEST_MAGIC_BYTES
-                .lock()
-                .expect("FATAL: test magic bytes mutex poisoned")
-            {
-                return set_bytes.to_vec();
-            }
-        }
-        self.magic_bytes.as_bytes().to_vec()
     }
 
     pub fn get_wallet_address(
@@ -702,8 +682,6 @@ pub mod tests {
     pub mod utils {
         use std::net::TcpListener;
 
-        use crate::bitcoin::MagicBytes;
-
         use super::*;
        
         use rand::Rng;
@@ -714,7 +692,6 @@ pub mod tests {
         pub fn create_cosigner_config() -> Config {
             let mut config = Config::default();
             config.bitcoin.network_id = BitcoinNetworkType::Regtest;
-            config.bitcoin.magic_bytes = "T3".as_bytes().into();
             config.bitcoin.username = Some(String::from("user"));
             config.bitcoin.password = Some(String::from("12345"));
             // overriding default "0.0.0.0" because doesn't play nicely on Windows.
@@ -767,29 +744,6 @@ pub mod tests {
                 .send_transaction(tx)
                 .expect("Tx should be sent to the burnchain!");
             btc_controller.build_next_block(1); // Now tx is confirmed
-        }
-
-        pub fn txout_opreturn<T: StacksMessageCodec>(
-            op: &T,
-            magic: &MagicBytes,
-            value: u64,
-        ) -> TxOut {
-            let op_bytes = {
-                let mut buffer = vec![];
-                let mut magic_bytes = magic.as_bytes().to_vec();
-                buffer.append(&mut magic_bytes);
-                op.consensus_serialize(&mut buffer)
-                    .expect("FATAL: invalid operation");
-                buffer
-            };
-
-            TxOut {
-                value,
-                script_pubkey: Builder::new()
-                    .push_opcode(opcodes::All::OP_RETURN)
-                    .push_slice(&op_bytes)
-                    .into_script(),
-            }
         }
     }
 

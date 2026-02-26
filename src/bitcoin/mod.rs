@@ -19,9 +19,8 @@
 
 use std::{error, fmt, io};
 
-use stacks_common::util::secp256k1;
 use stacks_common::deps_common::bitcoin::network::serialize::Error as BtcSerializeError;
-use stacks_common::types::chainstate::BurnchainHeaderHash;
+use stacks_common::util::secp256k1;
 use stacks_common::util::HexError as btc_hex_error;
 use stacks_common::util::hash::DoubleSha256;
 
@@ -31,7 +30,6 @@ use crate::bitcoin::address::BitcoinAddress;
 use crate::util::sqlite::Error as DBError;
 
 pub mod address;
-pub mod bits;
 pub mod blocks;
 pub mod ops;
 pub mod rpc;
@@ -96,53 +94,10 @@ impl Wtxid {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Copy)]
-pub struct MagicBytes([u8; 2]);
-impl_array_newtype!(MagicBytes, u8, 2);
-impl MagicBytes {
-    pub fn default() -> MagicBytes {
-        MACH2_MAGIC_MAINNET
-    }    
-}
-
-impl TryFrom<&str> for MagicBytes {
-    type Error = String;
-    fn try_from(bytes: &str) -> Result<Self, Self::Error> {
-        if bytes.len() != 2 {
-            return Err(format!("Magic bytes '{bytes}' must be two characters long"));
-        }
-        if !bytes.is_ascii() {
-            return Err(format!("Magic bytes '{bytes}' must be ASCII"));
-        }
-        let mut buff = [0u8; 2];
-        let mut next = 0;
-        for chr in bytes.chars() {
-            if next >= 2 {
-                break;
-            }
-            buff[next] = chr as u8;
-            next += 1;
-        }
-        Ok(MagicBytes(buff))
-    }
-}
-
-impl fmt::Display for MagicBytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", str::from_utf8(&self.0).unwrap_or("<invalid UTF-8>"))
-    }
-}
-
-pub const MACH2_MAGIC_MAINNET: MagicBytes = MagicBytes([77, 50]); // 'M2'
-pub const MAGIC_BYTES_LENGTH: usize = 2;
-
-/// Network error
 #[derive(Debug)]
 pub enum Error {
     /// Serialization error
     BtcSerializationError(BtcSerializeError),
-    /// Invalid magic
-    InvalidMagic,
     /// general filesystem error
     FilesystemError(io::Error),
     /// Database error
@@ -173,7 +128,6 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::BtcSerializationError(ref e) => fmt::Display::fmt(e, f),
-            Error::InvalidMagic => write!(f, "invalid network magic"),
             Error::FilesystemError(ref e) => fmt::Display::fmt(e, f),
             Error::DBError(ref e) => fmt::Display::fmt(e, f),
             Error::HashError(ref e) => fmt::Display::fmt(e, f),
@@ -242,63 +196,3 @@ impl fmt::Display for BitcoinNetworkType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Eq, Serialize, Deserialize)]
-pub struct BitcoinTxOutput {
-    pub address: BitcoinAddress,
-    pub units: u64,
-}
-
-/// Legacy Bitcoin address input type, based on scriptSig.
-#[derive(Debug, PartialEq, Clone, Eq, Serialize, Deserialize)]
-pub enum BitcoinInputType {
-    Standard,
-    SegwitP2SH,
-}
-
-/// Bitcoin input state
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub struct BitcoinTxInput {
-    pub scriptSig: Vec<u8>,
-    pub witness: Vec<Vec<u8>>,
-    pub tx_ref: (Txid, u32),
-}
-
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct BitcoinTransaction {
-    pub txid: Txid,
-    pub wtxid: Wtxid,
-    pub vtxindex: u32,
-    pub opcode: u8,
-    pub data: Vec<u8>,
-    /// how much BTC was sent to the data output
-    pub data_amt: u64,
-    pub inputs: Vec<BitcoinTxInput>,
-    pub outputs: Vec<BitcoinTxOutput>,
-}
-
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct BitcoinBlock {
-    pub block_height: u64,
-    pub block_hash: BurnchainHeaderHash,
-    pub parent_block_hash: BurnchainHeaderHash,
-    pub txs: Vec<BitcoinTransaction>,
-    pub timestamp: u64,
-}
-
-impl BitcoinBlock {
-    pub fn new(
-        height: u64,
-        hash: &BurnchainHeaderHash,
-        parent: &BurnchainHeaderHash,
-        txs: Vec<BitcoinTransaction>,
-        timestamp: u64,
-    ) -> BitcoinBlock {
-        BitcoinBlock {
-            block_height: height,
-            block_hash: hash.clone(),
-            parent_block_hash: parent.clone(),
-            txs,
-            timestamp,
-        }
-    }
-}

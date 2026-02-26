@@ -32,11 +32,11 @@ use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 use libstackerdb::SlotMetadata;
 use libstackerdb::StackerDBChunkData;
 
-use crate::storage::M2Storage;
+use crate::storage::Storage;
 
 use crate::net::Error;
 
-impl M2Storage {
+impl Storage {
     /// given a list of signers and a private key, find the slot IDs this private key can access.
     fn find_available_slots(signers: &[StacksAddress], privkey: &Secp256k1PrivateKey) -> Vec<u32> {
         let mut available = vec![];
@@ -60,7 +60,7 @@ impl M2Storage {
         replica_client: Box<dyn StackerDBClient>,
         privkey: Secp256k1PrivateKey,
     ) -> Result<Self, Error> {
-        let mut cosigner_storage = M2Storage {
+        let mut cosigner_storage = Storage {
             privkey: privkey.clone(),
             home_client,
             replica_client,

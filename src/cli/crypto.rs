@@ -56,7 +56,7 @@ pub fn handle_crypto_command(cmd: &str, argv: &mut Vec<String>) -> Result<String
         });
         return Ok(format!("{}", &key_json));
     }
-    if cmd == "pubk" {
+    if cmd == "public-key" {
         if argv.len() < 1 {
             return Err(Error::Failed(format!("Usage: {} {cmd} PRIVATE_KEY", &subcmd), 1));
         }

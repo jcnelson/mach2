@@ -32,21 +32,21 @@ pub const MAX_HTTP_HEADER_LEN: usize = 4096;
 
 /// Decoding of the relevant parts of a signer-directed HTTP request from the Stacks node
 #[derive(Debug)]
-pub struct M2HttpRequest {
+pub struct HttpRequest {
     pub verb: String,
     pub path: String,
     pub headers: HashMap<String, String>,
     pub body_offset: usize,
 }
 
-impl M2HttpRequest {
+impl HttpRequest {
     pub fn new(
         verb: String,
         path: String,
         headers: HashMap<String, String>,
         body_offset: usize,
-    ) -> M2HttpRequest {
-        M2HttpRequest {
+    ) -> HttpRequest {
+        HttpRequest {
             verb,
             path,
             headers,
@@ -62,7 +62,7 @@ impl M2HttpRequest {
 
 /// Decode the HTTP request payload into its headers and body.
 /// Returns (verb, path, table of headers, body_offset) on success
-pub fn decode_http_request(payload: &[u8]) -> Result<M2HttpRequest, Error> {
+pub fn decode_http_request(payload: &[u8]) -> Result<HttpRequest, Error> {
     // realistically, there won't be more than 32 headers
     let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
     let mut req = httparse::Request::new(&mut headers_buf);
@@ -121,7 +121,7 @@ pub fn decode_http_request(payload: &[u8]) -> Result<M2HttpRequest, Error> {
             ));
         };
 
-    Ok(M2HttpRequest::new(verb, path, headers, body_offset))
+    Ok(HttpRequest::new(verb, path, headers, body_offset))
 }
 
 /// Decode the HTTP response payload into its headers and body.

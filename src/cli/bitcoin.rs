@@ -37,9 +37,9 @@ use crate::cli::Error;
 use crate::cli::usage;
 use crate::cli::load_from_file_or_stdin;
 
-use serde::{Serialize, Deserialize};
+use crate::contracts::execute_in_bitcoin_contract;
 
-const BITCOIN_CONTRACT_CODE : &str = include_str!("../contracts/bitcoin.clar");
+use serde::{Serialize, Deserialize};
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct BitcoinSegwitMerkleProof {
@@ -174,9 +174,7 @@ impl BitcoinSegwitMerkleProof {
                 {coinbase_tx}
                 {coinbase_proof_list})");
 
-        let full_code = format!("{BITCOIN_CONTRACT_CODE}\n{invocation}");
-
-        let Ok(Some(result)) = vm_execute(&full_code, ClarityVersion::latest())
+        let Ok(Some(result)) = execute_in_bitcoin_contract(&invocation)
             .inspect_err(|e| m2_warn!("Failed to check Merkle proof: {e:?}"))
         else {
             return false;

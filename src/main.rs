@@ -41,6 +41,7 @@ extern crate url;
 
 pub mod bitcoin;
 pub mod cli;
+pub mod contracts;
 pub mod core;
 pub mod events;
 pub mod net;

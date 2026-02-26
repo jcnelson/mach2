@@ -53,9 +53,6 @@ use crate::storage::mock::{MockStackerDBClient, LocalStackerDBClient};
 
 use crate::core::config::Config;
 
-use crate::storage::dag::DagDB;
-
-pub mod dag;
 pub mod mock;
 pub mod stackerdb;
 
@@ -63,7 +60,7 @@ pub mod stackerdb;
 pub mod tests;
 
 /// Instantiated handle to mach2 stackerdb storage
-pub struct M2Storage {
+pub struct Storage {
     /// home node address
     node: Option<SocketAddr>,
     /// connection to a node with a replica
@@ -78,7 +75,7 @@ pub struct M2Storage {
     signers: Option<Vec<StacksAddress>>,
 }
 
-impl M2Storage {
+impl Storage {
     pub fn resolve_config_node(config: &Config) -> Result<Option<SocketAddr>, Error> {
         let mut addrs: Vec<_> = config.get_node_addr()
             .to_socket_addrs()

@@ -30,7 +30,7 @@ use crate::bitcoin::blocks::BitcoinHashExtensions;
 use crate::bitcoin::signer::BitcoinOpSigner;
 use crate::bitcoin::wallet::{UTXO, UTXOSet, DUST_UTXO_LIMIT};
 
-use crate::bitcoin::ops::{M2Ops, witness};
+use crate::contracts::execute_in_witness_contract;
 
 pub trait StacksAddressExtensions {
     fn to_pushdata(&self) -> [u8; 21];
@@ -47,21 +47,20 @@ impl StacksAddressExtensions for StacksAddress {
     }
 }
 
-pub struct M2PegIn {
+pub struct OpPegIn {
     locktime: u32,
     safety_margin: u32,
     spender_pubkey: Secp256k1PublicKey,
     user_pubkey: Secp256k1PublicKey,
     user_signature_witness: Vec<u8>,    // one user signature for now
     cosigner_pubkeys: Vec<Secp256k1PublicKey>,
-    cosigner_threshold: u8,
     cosigner_signature_witness: Vec<Vec<u8>>,
-    recipient: StacksAddress,
+    provider: StacksAddress,
     amount: u64
 }
 
-impl M2PegIn {
-    pub fn new(locktime: u32, safety_margin: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], cosigner_threshold: u8, recipient: StacksAddress, amount: u64) -> Self {
+impl OpPegIn {
+    pub fn new(locktime: u32, safety_margin: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], provider: StacksAddress, amount: u64) -> Self {
         Self {
             locktime,
             safety_margin,
@@ -69,9 +68,8 @@ impl M2PegIn {
             user_signature_witness: vec![],
             spender_pubkey: user_pubkey.clone(),
             cosigner_pubkeys: cosigner_pubkeys.to_vec(),
-            cosigner_threshold,
             cosigner_signature_witness: vec![],
-            recipient,
+            provider,
             amount,
         }
     }
@@ -81,12 +79,55 @@ impl M2PegIn {
         self
     }
 
-    pub fn make_initial_witness_stack(&self) -> Vec<Script> {
-        witness::make_initial_witness_stack_from_script(&self.make_witness_script())
+    pub fn make_initial_witness_stack(witness_script: &Script) -> Vec<Script> {
+        let mut scripts = vec![];
+        scripts.push(Script::from(vec![]));
+        scripts.push(witness_script.clone());
+        scripts
     }
 
     pub fn make_witness_script(&self) -> Script {
-        witness::make_witness_script_for_pegin(&self.user_pubkey, self.cosigner_threshold, &self.cosigner_pubkeys, &self.recipient, self.locktime, self.safety_margin)
+        let recipient_principal = self.provider.to_string();
+        let user_pubkey_hex = self.user_pubkey.to_hex();
+        let locktime = self.locktime;
+        let safety_margin = self.safety_margin;
+
+        let cosigner_keys_hex : Vec<_> = self.cosigner_pubkeys.iter()
+            .map(|pubk| format!("0x{}", &pubk.to_hex()))
+            .collect();
+
+        let cosigner_keys_list = format!("(list {})", &cosigner_keys_hex.join(" "));
+
+        let witness_tuple = format!(r#"{{
+    recipient-principal: {recipient_principal},
+    user-pubkey: 0x{user_pubkey_hex},
+    locktime: u{locktime},
+    safety-margin: u{safety_margin}
+}}"#);
+
+        let cosigner_program = format!("(make-cosigner-multisig-script {cosigner_keys_list}");
+        let cosigner_dag_script_value = execute_in_witness_contract(&cosigner_program)
+            .unwrap_or_else(|e| panic!("Failed to run Clarity program {cosigner_program}: {e:?}"))
+            .unwrap_or_else(|| panic!("Clarity program did not complete: {cosigner_program}"));
+                
+        let cosigner_dag_buff = cosigner_dag_script_value
+            .expect_buff(1376)
+            .unwrap_or_else(|e| panic!("Failed to get (buff 1376): {e:?}"));
+
+        let witness_script_program = format!("(make-pegin-witness-script 0x{cosigner_program} {witness_tuple})");
+        let witness_script_value = execute_in_witness_contract(&witness_script_program)
+            .unwrap_or_else(|e| panic!("Failed to run Clarity program {witness_script_program}: {e:?}"))
+            .unwrap_or_else(|| panic!("Clarity program did not complete: {witness_script_program}"));
+
+        let witness_script_buff_value = witness_script_value
+            .expect_result_ok()
+            .unwrap_or_else(|e| panic!("Did not get (ok witness-script): got {e:?}"));
+
+        let witness_script_buff = witness_script_buff_value
+            .expect_buff(1376)
+            .unwrap_or_else(|e| panic!("Did not get (buff 1376): got {e:?}"));
+
+        witness_script_buff.into()
     }
 
     pub fn p2wsh_pegin_script_pubkey(&self) -> Script {
@@ -97,7 +138,7 @@ impl M2PegIn {
     /// Make a TxIn which spends a UTXO whose witness program matches the witness script code we'd
     /// generate
     pub fn make_pegin_spend_txin(utxo: &UTXO, witness_script: &Script) -> TxIn {
-        let witness : Vec<Vec<u8>> = witness::make_initial_witness_stack_from_script(witness_script)
+        let witness : Vec<Vec<u8>> = Self::make_initial_witness_stack(witness_script)
             .into_iter()
             .map(|s| s.to_bytes())
             .collect();
@@ -140,7 +181,7 @@ impl M2PegIn {
         pubkey_v0_p2wpkh
     }
 
-    /// Create an unsigned mach2 peg-in transaction, which consumes some or all of the `utxo_set`.
+    /// Create an unsigned peg-in transaction, which consumes some or all of the `utxo_set`.
     /// Spends p2wkh UTXOs that the spender can spend
     ///
     /// Returns Some(tx) on success, and reduces `utxos_set` to the UTXOs which will be consumed
@@ -232,7 +273,7 @@ impl M2PegIn {
         Some(tx)
     }
     
-    /// Create an unsigned mach2 peg-in spending transaction, which consumes some or all of the `utxo_set`.
+    /// Create an unsigned peg-in spending transaction, which consumes some or all of the `utxo_set`.
     /// Spends p2wkh UTXOs that the spender can spend, as well as previously mined peg-in UTXOs
     ///
     /// Returns Some(tx) on success, and reduces `utxos_set` to the UTXOs which will be consumed

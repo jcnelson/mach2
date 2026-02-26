@@ -26,17 +26,19 @@ use clarity::vm::database::MemoryBackingStore;
 use clarity::vm::contexts::GlobalContext;
 use clarity::vm::eval_all;
 use clarity::vm::types::Value;
-use clarity::vm::errors::Error as clarity_error;
+use clarity::vm::errors::ClarityEvalError;
+use clarity::vm::errors::VmExecutionError;
+use clarity_types::errors::ParseError;
 
 use stacks_common::types::StacksEpochId;
 use stacks_common::consts::CHAIN_ID_MAINNET;
 
-pub const DEFAULT_M2_EPOCH: StacksEpochId = StacksEpochId::Epoch33;
+pub const DEFAULT_EPOCH: StacksEpochId = StacksEpochId::Epoch33;
 pub const DEFAULT_CHAIN_ID: u32 = CHAIN_ID_MAINNET;
 
 #[derive(Debug)]
 pub enum Error {
-    Clarity(String),
+    Clarity(ClarityEvalError),
     InvalidInput(String),
     NotInitialized,
     ContractAlreadyExists,
@@ -53,9 +55,21 @@ impl fmt::Display for Error {
     }
 }
 
-impl From<clarity_error> for Error {
-    fn from(e: clarity_error) -> Self {
-        Self::Clarity(format!("{:?}", &e))
+impl From<ClarityEvalError> for Error {
+    fn from(e: ClarityEvalError) -> Self {
+        Self::Clarity(e)
+    }
+}
+
+impl From<VmExecutionError> for Error {
+    fn from(e: VmExecutionError) -> Self {
+        Self::Clarity(e.into())
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(e: ParseError) -> Self {
+        Self::Clarity(e.into())
     }
 }
 
@@ -70,17 +84,17 @@ pub fn vm_execute(program: &str, clarity_version: ClarityVersion) -> Result<Opti
         DEFAULT_CHAIN_ID,
         conn,
         LimitedCostTracker::new_free(),
-        DEFAULT_M2_EPOCH,
+        DEFAULT_EPOCH,
     );
+    let parsed = ast::build_ast(
+        &contract_id,
+        program,
+        &mut (),
+        clarity_version,
+        DEFAULT_EPOCH,
+    )?
+    .expressions;
     Ok(global_context.execute(|g| {
-        let parsed = ast::build_ast(
-            &contract_id,
-            program,
-            &mut (),
-            clarity_version,
-            DEFAULT_M2_EPOCH,
-        )?
-        .expressions;
         eval_all(&parsed, &mut contract_context, g, None)
     })?)
 }

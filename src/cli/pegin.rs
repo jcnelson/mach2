@@ -29,7 +29,7 @@ use stacks_common::types::{PrivateKey, PublicKey};
 use crate::bitcoin::{Txid, Wtxid};
 use crate::bitcoin::blocks::{TransactionExtensions, BlockExtensions, BitcoinHashExtensions, bitcoin_merkle_tree};
 
-use crate::bitcoin::ops::M2PegIn;
+use crate::bitcoin::ops::OpPegIn;
 use crate::bitcoin::wallet::UTXOSet;
 use crate::cli::Error;
 use crate::cli::usage;
@@ -90,7 +90,7 @@ pub fn handle_pegin_command(cmd: &str, argv: &mut Vec<String>) -> Result<String,
 
         let mut utxos = load_utxos(&user_pubkey, &utxo_path_opt)?;
 
-        let pegin = M2PegIn::new(locktime, &user_pubkey, &cosigner_pubkeys, cosigner_threshold, amount);
+        let pegin = OpPegIn::new(locktime, &user_pubkey, &cosigner_pubkeys, cosigner_threshold, amount);
         let Some(tx) = pegin.make_unsigned_transaction(amount, &mut utxo_set) else {
             return Err(Error::Failed("Failed to produce unsigned transaction from available UTXOs".to_string(), 2));
         };
@@ -110,7 +110,7 @@ pub fn handle_pegin_command(cmd: &str, argv: &mut Vec<String>) -> Result<String,
         let pegin_psbt : Transaction = deserialize(&pegin_psbt_bytes)
             .map_err(|e| Error::Failed(format!("Invalid PSBT: {e:?}"), 1)))?;
 
-        let pegin = M2PegIn::from_psbt(&pegin_psbt)
+        let pegin = OpPegIn::from_psbt(&pegin_psbt)
             .map_err(|e| Error::Failed(format!("Invalid pegin PSBT: {e:?}", 1)));
     */
 }

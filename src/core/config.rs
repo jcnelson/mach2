@@ -22,7 +22,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::bitcoin::BitcoinNetworkType;
-use crate::bitcoin::MagicBytes;
 use serde::Deserialize;
 use serde::Serialize;
 use toml;
@@ -91,8 +90,6 @@ impl ConfigPrivateKey {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigBitcoin {
-    /// magic bytes to scan for
-    pub magic_bytes: MagicBytes,
     /// mainnet, testnet, or regtest
     pub network_id: BitcoinNetworkType,
     /// bitcoin host 
@@ -180,8 +177,6 @@ pub struct ConfigFileMockStackerDB {
 pub struct ConfigFileBitcoin {
     /// mainnet, testnet, regtest
     network_id: Option<String>,
-    /// magic bytes for OP_RETURN
-    magic_bytes: Option<String>,
     /// bitcoin host
     peer_host: String,
     /// bitcoin p2p port
@@ -243,13 +238,6 @@ impl ConfigFile {
 impl TryFrom<ConfigFileBitcoin> for ConfigBitcoin {
     type Error = String;
     fn try_from(config_file: ConfigFileBitcoin) -> Result<Self, Self::Error> {
-        let magic_bytes = if let Some(magic_bytes_str) = config_file.magic_bytes.as_ref() {
-            MagicBytes::try_from(magic_bytes_str.as_str())?
-        }
-        else {
-            MagicBytes::default()
-        };
-
         let network_id = if let Some(network_id_str) = config_file.network_id.as_ref() {
             BitcoinNetworkType::try_from(network_id_str.as_str())?
         }
@@ -259,7 +247,6 @@ impl TryFrom<ConfigFileBitcoin> for ConfigBitcoin {
 
         Ok(Self {
             network_id,
-            magic_bytes,
             peer_host: config_file.peer_host,
             peer_port: config_file.peer_port,
             rpc_port: config_file.rpc_port,
@@ -364,7 +351,6 @@ impl TryFrom<ConfigFile> for Config {
 impl From<ConfigBitcoin> for ConfigFileBitcoin {
     fn from(config: ConfigBitcoin) -> Self {
         Self {
-            magic_bytes: Some(config.magic_bytes.to_string()),
             network_id: Some(config.network_id.to_string()),
             peer_host: config.peer_host,
             peer_port: config.peer_port,
@@ -430,7 +416,6 @@ impl From<Config> for ConfigFile {
 impl ConfigBitcoin {
     pub fn default() -> Self {
         Self {
-            magic_bytes: MagicBytes::default(),
             network_id: BitcoinNetworkType::Mainnet,
             peer_host: "localhost".to_string(),
             peer_port: 8333,

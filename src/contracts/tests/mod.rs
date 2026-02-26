@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Stacks Open Internet Foundation
+// Copyright (C) 2026 Stacks Open Internet Foundation
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,17 +13,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::fs;
+use crate::util::execute_in_segwit_contract;
 
-use crate::bitcoin::wallet::tests::utils;
-
-use crate::bitcoin::wallet::{UTXO, UTXOSet};
-
-use stacks_common::util::hash::DoubleSha256;
-use stacks_common::util::hash::Hash160;
-use stacks_common::util::hash::Sha512Trunc256Sum;
-use stacks_common::util::hash::to_hex;
-use stacks_common::types::PublicKey;
-use stacks_common::deps_common::bitcoin::blockdata::script::{Builder, Script};
-use stacks_common::types::chainstate::StacksAddress;
-
+#[test]
+fn test_segwit_hello_world() {
+    let value = execute_in_segwit_contract("u1").unwrap();
+    assert_eq!(value.unwrap().expect_u128(), 1u128);
+}

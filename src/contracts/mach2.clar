@@ -1,33 +1,35 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                      Main module
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (define-constant ERR_NO_PROVIDER u1)
 (define-constant ERR_NOT_TOPLEVEL u2)
-(define-constant ERR_BTC_EXPIRED u14)
-(define-constant ERR_TX_NO_UTXO u17)
-(define-constant ERR_TX_INVALID_PEGIN_P2WSH u18)
-(define-constant ERR_TX_NO_WITNESS_DATA u20)
-(define-constant ERR_WITNESS_BAD_PRINCIPAL u21)
-(define-constant ERR_DUPLICATE_UTXO u23) 
-(define-constant ERR_NO_PEGIN_UTXO u24)
-(define-constant ERR_WITNESS_BAD_LOCKTIME u25)
-(define-constant ERR_TOO_MANY_PROVIDERS u26)
-(define-constant ERR_NO_BTC_TRANSACTION u27)
-(define-constant ERR_TX_ALREADY_EXISTS u28)
-(define-constant ERR_INTEGER_RANGE u29)
-(define-constant ERR_TX_DECODE_ERROR u31)
-(define-constant ERR_TX_UTXO_WITNESS_MISMATCH u32)
-(define-constant ERR_TX_NO_TXIN u34)
-(define-cosntant ERR_TX_DUPLICATE_SIG u35)
-(define-constant ERR_TX_MALFORMED_WITNESS u36)
-(define-constant ERR_TX_INVALID_COSIGNER_SIGNATURE u37)
-(define-constant ERR_TX_INVALID_USER_SIGNATURE u38)
-(define-constant ERR_TX_UTXO_CHECK_FAILED u39)
-(define-constant ERR_TX_UTXO_WRONG_PROVIDER u40)
-(define-constant ERR_TX_UTXO_WRONG_USER u42)
-(define-constant ERR_PROVIDER_EXISTS u43)
-(define-constant ERR_TX_SPENDS_TOO_MUCH u45)
-(define-constant ERR_NO_SUCH_COSIGNER u46)
-(define-constant ERR_COSIGNER_KEY_ALREADY_USED u47)
-(define-constant ERR_INSUFFICIENT_BALANCE u48)
-(define-constant ERR_COSIGNER_EXISTS u49)
+(define-constant ERR_BTC_EXPIRED u3)
+(define-constant ERR_TX_NO_UTXO u4)
+(define-constant ERR_TX_INVALID_PEGIN_P2WSH u5)
+(define-constant ERR_TX_NO_WITNESS_DATA u6)
+(define-constant ERR_DUPLICATE_UTXO u8) 
+(define-constant ERR_NO_PEGIN_UTXO u9)
+(define-constant ERR_WITNESS_BAD_LOCKTIME u10)
+(define-constant ERR_TOO_MANY_PROVIDERS u11)
+(define-constant ERR_NO_BTC_TRANSACTION u12)
+(define-constant ERR_TX_ALREADY_EXISTS u13)
+(define-constant ERR_TX_DECODE_ERROR u15)
+(define-constant ERR_TX_UTXO_WITNESS_MISMATCH u16)
+(define-constant ERR_TX_NO_TXIN u17)
+(define-cosntant ERR_TX_DUPLICATE_SIG u18)
+(define-constant ERR_TX_MALFORMED_WITNESS u19)
+(define-constant ERR_TX_INVALID_COSIGNER_SIGNATURE u20)
+(define-constant ERR_TX_INVALID_USER_SIGNATURE u21)
+(define-constant ERR_TX_UTXO_CHECK_FAILED u22)
+(define-constant ERR_TX_UTXO_WRONG_PROVIDER u23)
+(define-constant ERR_TX_UTXO_WRONG_USER u24)
+(define-constant ERR_PROVIDER_EXISTS u25)
+(define-constant ERR_TX_SPENDS_TOO_MUCH u26)
+(define-constant ERR_NO_SUCH_COSIGNER u27)
+(define-constant ERR_COSIGNER_KEY_ALREADY_USED u28)
+(define-constant ERR_INSUFFICIENT_BALANCE u29)
+(define-constant ERR_COSIGNER_EXISTS u30)
 
 (define-constant SINGLESIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x16 0x1a))
 (define-constant MULTISIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x14 0x15))
@@ -49,10 +51,6 @@
 (define-constant (OP_11 0x5b))
 (define-constant (OP_CHECKMULTISIG 0xae))
 (define-constant (OP_11_OP_CHECKMULTISIG (concat OP_11 OP_CHECKMULTISIG)))
-
-(define-constant (SIGHASH_ALL u1))
-(define-constant (SIGHASH_NONE u2))
-(define-constant (SIGHASH_SINGLE u3))
 
 ;; type of redemption DAG tx
 (define-constant DAG_TX_PEGIN u1)
@@ -90,13 +88,6 @@
             (ok tx-sender)
             (err ERR_NOT_TOPLEVEL))))
 
-;; Iterator to build up a multisig script
-(define-private (make-multisig-script-iter
-    (key (buff 33))
-    (script (buff 1376)))
-
-    (unwrap-panic (as-max-len? (concat script (concat 0x21 key)) u1376)))
-
 ;; Iterator to determine if a cosigner key is used
 (define-private (check-cosigner-keys-used
     (key (buff 33))
@@ -121,8 +112,7 @@
     (let (
         (cosigner-addr (try! (get-toplevel-addr)))
         (dag-keys-unused (try! (fold check-cosigner-keys-used dag-keys true) (err ERR_COSIGNER_KEY_ALREADY_USED)))
-        (cosigner-dag-script
-            (concat (fold make-multisig-script-iter dag-keys OP_8) OP_11_OP_CHECKMULTISIG))
+        (cosigner-dag-script (make-cosigner-multisig-script dag-keys))
     )
 
     (asserts! (map-insert cosigner-info
@@ -161,13 +151,15 @@
         ;; pre-computed signature hash data, so we can check
         ;; signatures on off-chain transactions.
         signature-hash: {
-            version: (buff 4),
-            hash-prevouts: (buff 32),
-            hash-sequence: (buff 32),
-            hash-outputs: (buff 32),
-            locktime: (buff 4),
-            sighash: (buff 4)
-        },
+            ;; version: 4-byte little-endian
+            ;; hash-prevouts: 32-byte hash of previous outpoints
+            ;; hash-sequence: 32-byte hash of input sequences
+            version-hash-prevouts-hash-sequence: (buff 68),
+            ;; hash-outputs: 32-byte hash of outputs
+            ;; locktime: 4-byte little-endian 
+            ;; sighash: 4-byte little-endian
+            hash-outputs-locktime-sighash: (buff 44)
+        }
     })
 
 ;; All DAG UTXOs, keyed by outpoint.
@@ -282,183 +274,6 @@
         ;; do not have provider
         (err ERR_NO_PROVIDER))))
 
-;; Serialize and concatenation the previous outpoints as part of computing a segwit signature hash.
-(define-private (segwit-prevouts-hash-iter
-    (inp {
-        outpoint: { hash: (buff 32), index: uint },
-        scriptSig: (buff 1376),
-        sequence: uint,
-        witness: (list 13 (buff 1376)),
-    })
-    (serialized (buff 4096)))
-
-    (unwrap-panic (as-max-len? (concat serialized (concat
-        (get hash (get outpoint inp)) (concat
-        (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? (get index (get outpoint inp))) u13 u17)))
-        u4096))))))
-
-;; Compute a segwit tx hashPrevouts as part of computing a segwit signature hash.
-(define-read-only (segwit-prevouts-hash
-    (ins (list 50 {
-        outpoint: { hash: (buff 32), index: uint },
-        scriptSig: (buff 1376),
-        sequence: uint,
-        witness: (list 13 (buff 1376))
-    }))
-    (anyone-can-pay bool))
-
-    (if anyone-can-pay)
-        ;; per BIP-143, this is all 0's
-        0x0000000000000000000000000000000000000000000000000000000000000000
-        ;; otherwise it's the sha256d of the concatenation of the previous outpoints,
-        ;; which are each the concatenation of the previous txid and output index
-        (sha256 (sha256 (fold segwit-prevouts-hash-iter ins 0x))))
-
-;; Compute the hash of sequence values for tx inputs as part of computing a segwit signature hash.
-(define-read-only (segwit-sequence-hash-iter
-    (inp {
-        outpoint: { hash: (buff 32), index: uint },
-        scriptSig: (buff 1376),
-        sequence: uint,
-        witness: (list 13 (buff 1376)),
-    })
-    (serialized (buff 4096)))
-
-    (unwrap-panic (as-max-len? (concat serialized
-        (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? (get sequence inp)) u13 u17)))
-        u4096))))
-
-;; Compute a segwit tx hashSequence
-(define-read-only (segwit-sequence-hash
-    (ins (list 50 {
-        outpoint: { hash: (buff 32), index: uint },
-        scriptSig: (buff 1376),
-        sequence: uint,
-        witness: (list 13 (buff 1376))
-    }))
-    (sighash-type uint)
-    (anyone-can-pay bool))
-    
-    ;; anyone-can-pay, or sighash-none, or sighash-single
-    (if (or anyone-can-pay (is-eq sgihash-type SIGHASH_NONE) (is-eq sighash-type SIGHASH_SINGLE))
-        ;; per BIP-143, this is all 0's
-        0x0000000000000000000000000000000000000000000000000000000000000000
-        ;; sha256d of the concatenation of the nSequences
-        (sha256 (sha256 (fold segwit-sequence-hash-iter ins 0x)))))
-
-;; Compute the script bytes for a segwit scriptPubKey for the purposes of signature hash calculation.
-;; Only supports p2wsh, and it must be prefixed by 0x00.
-(define-read-only (segwit-p2wsh-bytes (p2wsh (buff 33)))
-    (concat 0x21 p2wsh))
-
-;; Compute the hashed output for a segwit tx out.
-;; Assumes that the scriptPubKey is a p2wsh
-(define-read-only (segwit-outputs-hash-iter
-    (out {
-        value: uint,
-        scriptPubkey: (buff 1376)
-    })
-    (serialized (buff 4096)))
-
-    (unwrap-panic (as-max-len? (concat serialized
-        (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? (get value out)) u11 u17)))
-        (segwit-p2wsh-bytes (get scriptPubKey)))
-        u4096)))
-
-;; Get the hashed outputs for a segwit sighash
-(define-read-only (segwit-outputs-hash
-    (outs (list 50 {
-        value: uint,
-        scriptPubKey: (buff 1376),
-    }))
-    (input-index uint)
-    (sighash-type uint))
-
-    (if (not (or (is-eq sighash-type SIGHASH_SINGLE) (is-eq sighash-type SIGHASH_NONE)))
-        ;; not sighash-single nor sighash-none, so hash all amounts and scriptPubKeys
-        (sha256 (sha256 (fold segwit-outputs-hash-iter outs 0x)))
-    (if (and (is-eq sighash-type SIGHASH_SINGLE) (< input-index (len outs)))
-        ;; sighash-single on valid output
-        (sha256 (sha256 (segwit-outputs-hash-iter (unwrap-panic (element-at outs input-index)) 0x)))
-        ;; something else
-        0x0000000000000000000000000000000000000000000000000000000000000000)))
-
-;; Compute the segwit signature hash for a given input and spent UTXO's scriptPubKey and amount
-;; * Only supports p2wsh outputs
-;; * Does not support OP_CODESEPARATOR
-;; * Only supports SIGHASH_ALL
-(define-read-only (segwit-signature-hash
-    (ins (list 50 {
-        outpoint: { hash: (buff 32), index: uint },
-        scriptSig: (buff 1376),
-        sequence: uint,
-        witness: (list 13 (buff 1376))
-    }))
-    (outs (list 50 {
-        value: uint,
-        scriptPubKey: (buff 1376),
-    }))
-    (signature-hash {
-        version: (buff 4),
-        hash-prevouts: (buff 32),
-        hash-sequence: (buff 32),
-        hash-outputs: (buff 32),
-        locktime: (buff 4),
-        sighash: (buff 4)
-    })
-    (input-index uint)
-    (spent-p2wsh (buff 33))
-    (spent-amount uint))
-
-    (let (
-        (anyone-can-pay false)
-        (sighash-type SIGHASH_ALL)
-
-        ;; version: 4-byte little-endian
-        (version-bytes (get version signature-hash))
-
-        ;; previous outpoints hash
-        (hash-prevouts (get hash-prevouts signature-hash))
-
-        ;; input sequences hash
-        (hash-sequence (get hash-sequence signature-hash))
-
-        ;; input we're signing
-        (inp-to-sign (unwrap! (element-at? ins input-index) (err ERR_TX_NO_TXIN)))
-
-        ;; the outpoint of our input
-        (outpoint-bytes (segwit-outpouts-hash-iter (get outpoint inp-to-sign) 0x))
-
-        ;; our scriptPubKey (always a p2wsh)
-        (script-code-bytes (segwit-p2wsh-bytes spent-p2wsh))
-
-        ;; value: 8-byte little-endian
-        (value-spent (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? spent-amount u9 u17)))))
-
-        ;; sequence of our input: 4-byte little-endian 
-        (sequence-bytes (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? (get sequence inp-to-sign) u13 u17)))))
-
-        ;; hash of all TXOs
-        (hash-outputs (get hash-outputs signature-hash))
-
-        ;; locktime: 4-byte little-endian
-        (locktime-bytes (get locktime signature-hash))
-
-        ;; sighash bytes: 4-byte little-endian
-        (sighash-bytes (get sighash signature-hash))
-    )
-    (sha256 (sha256 (concat
-        version-bytes (concat
-        hash-prevouts (concat
-        hash-sequence (concat
-        outpoint-bytes (concat
-        script-code-bytes (concat
-        value-sent (concat
-        sequence-bytes (concat
-        hash-outputs (concat
-        locktime-bytes
-        sighash-bytes)))))))))))))
-
 ;; Iterator to search a list of keys to find if it produced the given signature over the given message.
 ;; If found, update `ctx` to have `found = true`.
 ;; If a signature is invalid, update `ctx` to have `valid = false`.
@@ -523,12 +338,8 @@
             scriptPubKey: (buff 1376),
         }),
         signature-hash: {
-            version: (buff 4),
-            hash-prevouts: (buff 32),
-            hash-sequence: (buff 32),
-            hash-outputs: (buff 32),
-            locktime: (buff 4),
-            sighash: (buff 4)
+            version-hash-prevouts-hash-sequence: (buff 68),
+            hash-outputs-locktime-sighash: (buff 44)
         }
     })
     (input-index uint)
@@ -644,12 +455,8 @@
             scriptPubKey: (buff 1376),
         }),
         signature-hash: {
-            version: (buff 4),
-            hash-prevouts: (buff 32),
-            hash-sequence: (buff 32),
-            hash-outputs: (buff 32),
-            locktime: (buff 4),
-            sighash: (buff 4)
+            version-hash-prevouts-hash-sequence: (buff 68),
+            hash-outputs-locktime-sighash: (buff 44)
         },
         utxos: (list 50 (optional {
             pointer: { txid: (buff 32), vout: uint },
@@ -694,12 +501,8 @@
         scriptPubKey: (buff 1376),
     }))
     (signature-hash {
-        version: (buff 4),
-        hash-prevouts: (buff 32),
-        hash-sequence: (buff 32),
-        hash-outputs: (buff 32),
-        locktime: (buff 4),
-        sighash: (buff 4)
+        version-hash-prevouts-hash-sequence: (buff 68),
+        hash-outputs-locktime-sighash: (buff 44)
     })
     (user-pubkey (buff 33))
     (cosigner-keys (list 11 (buff 33)))
@@ -880,66 +683,6 @@
    (reverse-buff16 (unwrap-panic (as-max-len? (unwrap-panic (slice? input u16 u32)) u16)))
    (reverse-buff16 (unwrap-panic (as-max-len? (unwrap-panic (slice? input u0 u16)) u16)))) u32)))
 
-;; Convert a u32 to a big-endian (buff 4)
-;; Upper bits are dropped.
-(define-read-only (uint32-to-buff-be (val uint))
-    (let (
-        (val-be (bit-or
-            (bit-shift-left (bit-and val u255) u24)
-            (bit-shift-left (bit-and val u65280) u8)
-            (bit-shift-right (bit-and val u16711680) u8)
-            (bit-shift-right (bit-and val u4278190080) u24)))
-    )
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val-be)) u13 u17)) u4))))
-
-;; Convert a u24 to a big-endian (buff 3).
-;; Upper bits are dropped
-(define-read-only (uint24-to-buff-be (val uint))
-    (let (
-       (val-be (bit-and u16777215 (bit-or
-            (bit-shift-left (bit-and val u255) u16)
-            (bit-shift-right (bit-and val u16711680) u16))))
-    )
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val-be)) u14 u17)) u3))))
-
-;; Convert a u16 to a big-endian (buff 2).
-;; Upper bits are dropped
-(define-read-only (uint16-to-buff-be (val uint))
-    (let (
-       (val-be (bit-and u65535 (bit-or
-            (bit-shift-left (bit-and val u255) u8)
-            (bit-shift-right (bit-and val u65280) u8))))
-    )
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val-be)) u15 u17)) u2))))
-
-;; Convert an u8 into a (buff 1)
-;; Upper bits are dropped
-(define-read-only (uint8-to-buff (val uint))
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u16 u17)) u1)))
-
-;; Convert a uint to a CScriptNum -- an OP_PUSHDATA followed by its big-endian byte representation.
-;; Only works for up to 4-byte numbers.
-(define-read-only (make-script-num (val uint))
-    (if (<= val u255)
-        (some (concat 0x01 (uint8-to-buff val)))
-    (if (<= val u65535)
-        (some (concat 0x02 (uint16-to-buff-be val)))
-    (if (<= val u16777215)
-        (some (concat 0x03 (uint24-to-buff-be val)))
-    (if (<= val u4294967295)
-        (some (concat 0x04 (uint32-to-buff-be val)))
-    none)))))
-
-;; Compute a PUSHDATA for a slice
-(define-read-only (op-push-slice (bytes (buff 1376)))
-    (if (< (len bytes) u75)
-        (concat (uint8-to-buff (len bytes)) bytes)
-    (if (< (len bytes) u255)
-        (concat OP_PUSHDATA1 (concat (uint8-to-buff (len bytes)) bytes))
-    (if (< (len bytes) u65536)
-        (concat OP_PUSHDATA2 (concat (uint16-to-buff (len bytes))) bytes)
-        (concat OP_PUSHDATA4 (concat (uint32-to-buff (len bytes))) bytes)))))
-
 ;; Compute the pegin witness script from the decoded pegin witness script
 ;; Compose witness script as:
 ;;
@@ -960,39 +703,13 @@
         safety-margin: uint
     }))
 
-    (begin
-
-    (asserts! (>= (get locktime witness-data) (get safety-margin witness-data))
-        (err ERR_WITNESS_BAD_LOCKTIME))
-
-    (asserts! (is-standard (get recipient-principal witness-data))
-        (err ERR_WITNESS_BAD_PRINCIPAL))
-
     (let (
-        (principal-bytes (try! (match (principal-destruct? (get recipient-principal witness))
-            parts (ok (concat (get version parts) (get hashbytes parts)))
-            err (err ERR_WITNESS_BAD_PRINCIPAL))))
-
         (cosigner-rec (unwrap! (map-get? cosigner-addr cosigner-info) (ERR_NO_SUCH_COSIGNER)))
         (cosigner-dag-spend-script (get dag-spend-script cosigner-rec))
-
-        (recipient-to-cosigner (concat
-            (op-push-slice (concat 0x05 principal-bytes)) (concat
-            OP_DROP (concat
-            (unwrap! (make-script-num (- (get locktime witness-data) (get safety-margin witness-data))) (err ERR_INTEGER_RANGE)) (concat
-            OP_CLTV_OP_DROP (concat
-            (op-push-slice (get user-pubkey witness-data))
-            OP_CHECKSIGVERIFY))))))
-            
-        (cosigner-to-end (concat
-            cosigner-dag-spend-script (concat
-            OP_0NOTEQUAL_OP_NOTIF (concat
-            (unwrap! (make-script-num (- (get locktime witness-data))) (err ERR_INEGER_RANGE))
-            OP_ENDIF))))
-
     )
-    (ok (concat recipient-to-cosigner cosigner-to-end)))))
- 
+
+    (make-pegin-witness-script cosigner-dag-spend-script witness-data)))
+
 ;; Last failure for contract-call to pasre-wtx
 (define-data-var last-btc-decode-error uint u0)
 
@@ -1026,14 +743,10 @@
                 ins: ins,
                 outs: (get outs decoded-tx),
                 locktime: (get locktime decoded-tx),
-                signature-hash: {
-                    version: (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? (get version decoded-tx u13 u17))))),
-                    hash-prevouts: (segwit-prevouts-hash ins false),
-                    hash-sequence: (segwit-sequence-hash ins SIGHASH_ALL false),
-                    hash-outputs: (segwit-outputs-hash (get outs decoded-tx) u0 SIGHASH_ALL),
-                    locktime: (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? locktime u13 u17)))),
-                    sighash: 0x00000001
-                }
+                signature-hash: (precompute-segwit-signature-hash
+                    (get version decoded-tx)
+                    ins
+                    (get outs decoded-tx))
             }))
         err-decode (begin
             (var-set last-btc-decode-error err-decode)
@@ -1161,6 +874,7 @@
     }))
 
     (let (
+        (cosigner-addr (try! (get-toplevel-addr)))
         (recipient-principal (get recipient-principal witness-data))
         (locktime (get locktime witness-data))
         (safety-margin (get safety-margin witness-data))
@@ -1186,7 +900,7 @@
         (txid (get txid decoded-tx))
 
         ;; witness script and its hash
-        (pegin-witness-script (try! (compute-pegin-witness-script witness-data)))
+        (pegin-witness-script (try! (compute-pegin-witness-script cosigner-addr witness-data)))
         (pegin-witness-script-hash (sha256 pegin-witness-script))
 
         ;; claimed pegin output
