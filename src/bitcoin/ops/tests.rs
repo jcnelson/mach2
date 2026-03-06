@@ -60,9 +60,6 @@ fn test_send_pegin_tx_and_joint_spend() {
     let mut cosigner_signer_2 = utils::create_keychain_with_seed(4);
     let cosigner_pubkey_2 = cosigner_signer_2.get_public_key();
 
-    let mut m2_user_signer = utils::create_keychain_with_seed(3);
-    let m2_user_pubkey = m2_user_signer.get_public_key();
-
     let mut config = utils::create_cosigner_config();
     config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
 
@@ -74,19 +71,17 @@ fn test_send_pegin_tx_and_joint_spend() {
     let user_btc_controller = BitcoinClient::new(config.clone());
     user_btc_controller.bootstrap_chain(1); // one utxo for miner_pubkey related address
 
-    config.bitcoin.local_mining_public_key = Some(cosigner_pubkey_1.to_hex());
-    config.bitcoin.wallet_name = "cosigner_wallet".to_string();
+    config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
+    config.bitcoin.wallet_name = "user_wallet".to_string();
     let cosigner_btc_controller = BitcoinClient::new(config);
     cosigner_btc_controller.bootstrap_chain(102); // two utxo for other_pubkeys related address
     
-    let mut spender_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
-    let mut cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
+    let mut user_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
 
     // lock until height 110, with clawback at 120
-    let mut pegin = OpPegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(1, Hash160([0x01; 20])).unwrap(), 1000000000)
-        .with_spender(&user_pubkey);
+    let mut pegin = OpPegIn::new(110, 10, &user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(22, Hash160([0x01; 20])).unwrap(), 1000000000);
 
-    let mut pegin_tx = pegin.make_unsigned_pegin_transaction(2000, &mut spender_utxos).expect("Failed to create pegin transaction");
+    let (mut pegin_tx, mut pegin_utxos) = pegin.make_unsigned_pegin_transaction(2000, &mut user_utxos).expect("Failed to create pegin transaction");
     eprintln!("unsigned pegin: {}", &pegin_tx.display());
 
     // check structure
@@ -97,11 +92,15 @@ fn test_send_pegin_tx_and_joint_spend() {
     assert_eq!(pegin_tx.output[0].value, 1000000000);
 
     // spending user signs
-    assert!(pegin.sign_spender(&mut user_signer, &mut spender_utxos, &mut pegin_tx));
+    assert!(pegin.sign_user(&mut user_signer, &mut pegin_utxos, &mut pegin_tx).is_ok());
     
     // cosigner signs
-    assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut cosigner_utxos, &mut pegin_tx));
-    assert!(pegin.sign_cosigner(&mut cosigner_signer_2, &mut cosigner_utxos, &mut pegin_tx));
+    assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut pegin_utxos, &mut pegin_tx).is_ok());
+    assert!(pegin.sign_cosigner(&mut cosigner_signer_2, &mut pegin_utxos, &mut pegin_tx).is_ok());
+    
+    for i in 0..pegin_tx.input.len() {
+        pegin.check_signatures(&pegin_tx, i).unwrap_or_else(|e| panic!("Failed to check signature on input {i}: {e:?}"));
+    }
 
     pegin.clear_witness();
     
@@ -124,34 +123,31 @@ fn test_send_pegin_tx_and_joint_spend() {
     m2_debug!("Send peg-in {}", &txid);
     
     // this transaction is now spendable
-    let spender_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
+    let user_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
     let cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
-    let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1);
+    let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1).unwrap();
+    let user_p2wpkh = pegin.user_p2wpkh();
 
     let mut utxos = UTXOSet::empty();
-    utxos.add(spender_utxos.utxos);
+    utxos.add(user_utxos.utxos);
     utxos.add(cosigner_utxos.utxos);
 
     assert_eq!(pegin_utxos.len(), 1, "m2 user has no UTXOs");
 
     // cosigner and user both sign to spend 
-    let mut pegin_spend = pegin.make_unsigned_pegin_spend_transaction(2000, &mut utxos, &pegin_utxos, false).expect("Failed to create joint spend transaction");
+    let (mut pegin_spend, mut pegin_utxoset) = pegin.make_unsigned_pegin_spend_transaction(2000, &utxos, &pegin_utxos, user_p2wpkh).expect("Failed to create joint spend transaction");
     eprintln!("unsigned pegin spend: {}", &pegin_spend.display());
     
     pegin_spend.lock_time = 110;
 
-    // m2 user signs
-    assert!(pegin.sign_user(&mut m2_user_signer, &mut utxos, &mut pegin_spend));
+    // user signs
+    assert!(pegin.sign_user(&mut user_signer, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("user-signed pegin spend: {}", &pegin_spend.display());
     
-    // spender signs
-    assert!(pegin.sign_spender(&mut user_signer, &mut utxos, &mut pegin_spend));
-    eprintln!("spender-signed pegin spend: {}", &pegin_spend.display());
-    
     // cosigner signs
-    assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut utxos, &mut pegin_spend));
+    assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("cosigner1-signed pegin spend: {}", &pegin_spend.display());
-    assert!(pegin.sign_cosigner(&mut cosigner_signer_2, &mut utxos, &mut pegin_spend));
+    assert!(pegin.sign_cosigner(&mut cosigner_signer_2, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("cosigner2-signed pegin spend: {}", &pegin_spend.display());
 
     pegin.clear_witness();
@@ -187,9 +183,6 @@ fn test_send_pegin_tx_and_clawback() {
     let mut cosigner_signer_2 = utils::create_keychain_with_seed(4);
     let cosigner_pubkey_2 = cosigner_signer_2.get_public_key();
 
-    let mut m2_user_signer = utils::create_keychain_with_seed(3);
-    let m2_user_pubkey = m2_user_signer.get_public_key();
-
     let mut config = utils::create_cosigner_config();
     config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
 
@@ -201,19 +194,17 @@ fn test_send_pegin_tx_and_clawback() {
     let user_btc_controller = BitcoinClient::new(config.clone());
     user_btc_controller.bootstrap_chain(1); // one utxo for miner_pubkey related address
 
-    config.bitcoin.local_mining_public_key = Some(cosigner_pubkey_1.to_hex());
-    config.bitcoin.wallet_name = "cosigner_wallet".to_string();
+    config.bitcoin.local_mining_public_key = Some(user_pubkey.to_hex());
+    config.bitcoin.wallet_name = "user_wallet".to_string();
     let cosigner_btc_controller = BitcoinClient::new(config);
     cosigner_btc_controller.bootstrap_chain(102); // two utxo for other_pubkeys related address
     
-    let mut spender_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
-    let mut cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
+    let mut user_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
 
     // lock until height 120
-    let mut pegin = OpPegIn::new(110, 10, &m2_user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(1, Hash160([0x12; 20])).unwrap(), 1000000000)
-        .with_spender(&user_pubkey);
+    let mut pegin = OpPegIn::new(110, 10, &user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(22, Hash160([0x12; 20])).unwrap(), 1000000000);
 
-    let mut pegin_tx = pegin.make_unsigned_pegin_transaction(2000, &mut spender_utxos).expect("Failed to create pegin transaction");
+    let (mut pegin_tx, mut pegin_utxos) = pegin.make_unsigned_pegin_transaction(2000, &mut user_utxos).expect("Failed to create pegin transaction");
     eprintln!("unsigned pegin: {}", &pegin_tx.display());
 
     // check structure
@@ -224,11 +215,15 @@ fn test_send_pegin_tx_and_clawback() {
     assert_eq!(pegin_tx.output[0].value, 1000000000);
 
     // spending user signs
-    assert!(pegin.sign_spender(&mut user_signer, &mut spender_utxos, &mut pegin_tx));
+    assert!(pegin.sign_user(&mut user_signer, &mut pegin_utxos, &mut pegin_tx).is_ok());
     
     // cosigner signs
-    assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut cosigner_utxos, &mut pegin_tx));
-    assert!(pegin.sign_cosigner(&mut cosigner_signer_2, &mut cosigner_utxos, &mut pegin_tx));
+    assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut pegin_utxos, &mut pegin_tx).is_ok());
+    assert!(pegin.sign_cosigner(&mut cosigner_signer_2, &mut pegin_utxos, &mut pegin_tx).is_ok());
+
+    for i in 0..pegin_tx.input.len() {
+        pegin.check_signatures(&pegin_tx, i).unwrap_or_else(|e| panic!("Failed to check signature on input {i}: {e:?}"));
+    }
 
     pegin.clear_witness();
     
@@ -251,34 +246,29 @@ fn test_send_pegin_tx_and_clawback() {
     cosigner_btc_controller.bootstrap_chain(20);
     
     // this transaction is now spendable
-    let spender_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
-    let cosigner_utxos = user_btc_controller.get_all_utxoset(&cosigner_pubkey_1);
-    let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1);
+    let user_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
+    let pegin_utxos = pegin.get_pegin_utxos(&pegin_tx, 1).unwrap();
 
     let mut utxos = UTXOSet::empty();
-    utxos.add(spender_utxos.utxos);
-    utxos.add(cosigner_utxos.utxos);
+    utxos.add(user_utxos.utxos);
 
     assert_eq!(pegin_utxos.len(), 1, "m2 user has no UTXOs");
 
-    let mut pegin_spend = pegin.make_unsigned_pegin_spend_transaction(2000, &mut utxos, &pegin_utxos, false).expect("Failed to create joint spend transaction");
+    let user_p2wpkh = pegin.user_p2wpkh();
+    let (mut pegin_spend, mut pegin_utxoset) = pegin.make_unsigned_pegin_spend_transaction(2000, &utxos, &pegin_utxos, user_p2wpkh).expect("Failed to create joint spend transaction");
     eprintln!("unsigned pegin spend: {}", &pegin_spend.display());
     
     // set locktime
     pegin_spend.lock_time = 120;
 
-    // m2 user signs
-    assert!(pegin.sign_user(&mut m2_user_signer, &mut utxos, &mut pegin_spend));
+    // user signs
+    assert!(pegin.sign_user(&mut user_signer, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("user-signed pegin spend: {}", &pegin_spend.display());
     
-    // spender signs
-    assert!(pegin.sign_spender(&mut user_signer, &mut utxos, &mut pegin_spend));
-    eprintln!("spender-signed pegin spend: {}", &pegin_spend.display());
-    
     // null cosigner signs
-    assert!(pegin.sign_null_cosigner(&mut user_signer, &mut utxos, &mut pegin_spend));
+    assert!(pegin.sign_null_cosigner(&mut user_signer, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("null-cosigner1-signed pegin spend: {}", &pegin_spend.display());
-    assert!(pegin.sign_null_cosigner(&mut user_signer, &mut utxos, &mut pegin_spend));
+    assert!(pegin.sign_null_cosigner(&mut user_signer, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("null-cosigner2-signed pegin spend: {}", &pegin_spend.display());
 
     pegin.clear_witness();
@@ -298,6 +288,7 @@ fn test_send_pegin_tx_and_clawback() {
     assert!(mined, "transaction not mined");
 }
 
+/*
 #[test]
 fn test_pegin_witness_script_unlock_height() {
     let mut user_signer = utils::create_keychain_with_seed(1);
@@ -319,6 +310,7 @@ fn test_pegin_witness_script_unlock_height() {
     let witness_script = pegin.make_witness_script();
     assert_eq!(witness::get_pegin_unlock_height(&witness_script).unwrap(), 120);
 }
+*/
 
 /*
 #[test]

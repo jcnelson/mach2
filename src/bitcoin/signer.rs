@@ -21,6 +21,8 @@ use stacks_common::types::PrivateKey;
 use stacks_common::util::hash::{Sha256Sum, hex_bytes};
 use stacks_common::util::secp256k1::{MessageSignature, Secp256k1PrivateKey, Secp256k1PublicKey};
 
+use crate::bitcoin::ops::Error;
+
 /// A signer used for Bitcoin operations, which manages a private key and provides
 /// functionality to derive public keys, sign messages, and export keys in different formats.
 ///
@@ -124,21 +126,21 @@ impl BitcoinOpSigner {
     ///
     /// `Some(MessageSignature)` if signing was successful, or `None` if the signer
     /// is disposed or signing failed.
-    pub fn sign_message(&mut self, hash: &[u8]) -> Option<MessageSignature> {
+    pub fn sign_message(&mut self, hash: &[u8]) -> Result<MessageSignature, Error> {
         if self.is_disposed {
             m2_debug!("Signer is disposed");
-            return None;
+            return Err(Error::FailedToSign("Signer is deposed".to_string()));
         }
 
         let signature = match self.secret_key.sign(hash) {
             Ok(r) => r,
             Err(e) => {
                 m2_debug!("Secret key error: {e:?}");
-                return None;
+                return Err(Error::FailedToSign(format!("Secret key error: {e:?}")));
             }
         };
 
-        Some(signature)
+        Ok(signature)
     }
 
     /// Marks the signer as disposed, preventing any further signing operations.
@@ -228,7 +230,7 @@ mod tests {
         let mut op_signer = BitcoinOpSigner::new(secp_k);
 
         let result = op_signer.sign_message(message);
-        assert!(result.is_none());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -242,7 +244,7 @@ mod tests {
         op_signer.dispose();
 
         let result = op_signer.sign_message(message);
-        assert!(result.is_none());
+        assert!(result.is_err());
     }
 }
 

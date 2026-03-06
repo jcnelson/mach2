@@ -40,3 +40,14 @@ pub fn execute_in_witness_contract(code: &str) -> Result<Option<Value>, VmError>
     let full_program = format!("{}\n{}", WITNESS_SCRIPT_CONTRACT, code);
     vm_execute(&full_program, DEFAULT_CLARITY_VERSION)
 }
+
+pub fn execute_in_scbtc_contract(code: &str) -> Result<Option<Value>, VmError> {
+    let full_program = format!(
+        "{}\n{}\n{}\n{}",
+        SEGWIT_CONTRACT,
+        WITNESS_SCRIPT_CONTRACT,
+        MAIN_CONTRACT,
+        code
+    );
+    vm_execute(&full_program, DEFAULT_CLARITY_VERSION)
+}

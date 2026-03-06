@@ -6,6 +6,23 @@
 (define-constant ERR_PEGIN_WITNESS_BAD_PRINCIPAL u201)
 (define-constant ERR_PEGIN_WITNESS_INTEGER_RANGE u202)
 
+;; BTC opcodes
+(define-constant OP_DROP 0x75)
+(define-constant OP_PUSHDATA1 0x4c)
+(define-constant OP_PUSHDATA2 0x4d)
+(define-constant OP_PUSHDATA4 0x4e)
+(define-constant OP_CHECKSIGVERIFY 0xad)
+(define-constant OP_NOTIF 0x64)
+(define-constant OP_0NOTEQUAL 0x92)
+(define-constant OP_0NOTEQUAL_OP_NOTIF (concat OP_0NOTEQUAL OP_NOTIF))
+(define-constant OP_CLTV 0xb1)
+(define-constant OP_CLTV_OP_DROP (concat OP_CLTV OP_DROP))
+(define-constant OP_ELSE 0x67)
+(define-constant OP_TRUE 0x51)
+(define-constant OP_ENDIF 0x68)
+(define-constant OP_ELSE_OP_TRUE_OP_ENDIF (concat OP_ELSE (concat OP_TRUE OP_ENDIF)))
+(define-constant OP_CHECKMULTISIG 0xae)
+
 ;; Iterator to build up a multisig script
 (define-private (make-multisig-script-iter
     (key (buff 33))
@@ -17,9 +34,9 @@
 (define-read-only (uint-to-op (val uint))
     (if (is-eq val u0)
         (some 0x00)
-    (if (> u16 val)
+    (if (<= u16 val)
         none
-        (some (uint8-to-buff (+ u50 val))))))
+        (some (uint8-to-buff (+ u80 val))))))
 
 ;; Create a multisig script out of keys for a cosigner.
 ;; It must have at least 2/3 threshold.
@@ -33,39 +50,21 @@
         (threshold-op (unwrap-panic (uint-to-op threshold)))
         (total-op (unwrap-panic (uint-to-op (len keys))))
     )
-    (concat (fold make-multisig-script-iter keys threshold-op) (concat total-op OP_CHECKMULTISIG))))
+    (unwrap-panic (as-max-len? (concat (fold make-multisig-script-iter keys threshold-op) (concat total-op OP_CHECKMULTISIG)) u1376))))
 
-;; Convert a u32 to a big-endian (buff 4)
-;; Upper bits are dropped.
-(define-read-only (uint32-to-buff-be (val uint))
-    (let (
-        (val-be (bit-or
-            (bit-shift-left (bit-and val u255) u24)
-            (bit-shift-left (bit-and val u65280) u8)
-            (bit-shift-right (bit-and val u16711680) u8)
-            (bit-shift-right (bit-and val u4278190080) u24)))
-    )
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val-be)) u13 u17)) u4))))
+;; Turn the lower 4 bytes of an integer into a (buff 4)
+(define-private (uint32-to-buff-be (val uint))
+    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u13 u17)) u4)))
 
 ;; Convert a u24 to a big-endian (buff 3).
 ;; Upper bits are dropped
 (define-read-only (uint24-to-buff-be (val uint))
-    (let (
-       (val-be (bit-and u16777215 (bit-or
-            (bit-shift-left (bit-and val u255) u16)
-            (bit-shift-right (bit-and val u16711680) u16))))
-    )
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val-be)) u14 u17)) u3))))
+    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u14 u17)) u3)))
 
 ;; Convert a u16 to a big-endian (buff 2).
 ;; Upper bits are dropped
 (define-read-only (uint16-to-buff-be (val uint))
-    (let (
-       (val-be (bit-and u65535 (bit-or
-            (bit-shift-left (bit-and val u255) u8)
-            (bit-shift-right (bit-and val u65280) u8))))
-    )
-    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val-be)) u15 u17)) u2))))
+    (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u15 u17)) u2)))
 
 ;; Convert an u8 into a (buff 1)
 ;; Upper bits are dropped
@@ -92,8 +91,8 @@
     (if (< (len bytes) u255)
         (concat OP_PUSHDATA1 (concat (uint8-to-buff (len bytes)) bytes))
     (if (< (len bytes) u65536)
-        (concat OP_PUSHDATA2 (concat (uint16-to-buff (len bytes))) bytes)
-        (concat OP_PUSHDATA4 (concat (uint32-to-buff (len bytes))) bytes)))))
+        (concat OP_PUSHDATA2 (concat (uint16-to-buff-be (len bytes)) bytes))
+        (concat OP_PUSHDATA4 (concat (uint32-to-buff-be (len bytes)) bytes))))))
 
 ;; Compute the pegin witness script from the decoded pegin witness script
 ;; Compose witness script as:
@@ -123,8 +122,8 @@
         (err ERR_PEGIN_WITNESS_BAD_PRINCIPAL))
     
     (let (
-        (principal-bytes (try! (match (principal-destruct? (get recipient-principal witness))
-            parts (ok (concat (get version parts) (get hashbytes parts)))
+        (principal-bytes (try! (match (principal-destruct? (get recipient-principal witness-data))
+            parts (ok (concat (get version parts) (get hash-bytes parts)))
             err (err ERR_PEGIN_WITNESS_BAD_PRINCIPAL))))
 
         (recipient-to-cosigner (concat
@@ -138,8 +137,10 @@
         (cosigner-to-end (concat
             cosigner-dag-spend-script (concat
             OP_0NOTEQUAL_OP_NOTIF (concat
-            (unwrap! (make-script-num (- (get locktime witness-data) (get safety-margin witness-data))) (err ERR_INEGER_RANGE))
-            OP_ENDIF))))
+            (unwrap! (make-script-num (get locktime witness-data)) (err ERR_PEGIN_WITNESS_INTEGER_RANGE))
+            OP_ELSE_OP_TRUE_OP_ENDIF))))
 
     )
     (ok (unwrap-panic (as-max-len? (concat recipient-to-cosigner cosigner-to-end) u1376))))))
+
+

@@ -97,7 +97,7 @@ pub fn get_loglevel() -> LogLevel {
             if let Some(ll) = ll_opt.as_ref() {
                 *ll
             } else {
-                if env::var("M2_DEBUG") == Ok("1".into()) {
+                if env::var("SCBTC_DEBUG") == Ok("1".into()) {
                     (*ll_opt).replace(LogLevel::Debug);
                     LogLevel::Debug
                 } else {

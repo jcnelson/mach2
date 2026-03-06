@@ -32,7 +32,7 @@ use crate::bitcoin::blocks::BitcoinHashExtensions;
 use crate::bitcoin::signer::BitcoinOpSigner;
 use crate::bitcoin::wallet::{UTXO, UTXOSet, DUST_UTXO_LIMIT};
 
-use crate::bitcoin::ops::{OpPegIn, witness};
+use crate::bitcoin::ops::OpPegIn;
 
 pub struct OpTransfer {
     cosigner_signature_witness: Vec<Vec<u8>>,
