@@ -31,6 +31,8 @@ use rusqlite::Error as RusqliteError;
 
 use clarity_types::types::{QualifiedContractIdentifier};
 use clarity_types::types::serialization::SerializationError;
+use clarity_types::execution_cost::ExecutionCost;
+
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::types::chainstate::BurnchainHeaderHash;
 use stacks_common::types::chainstate::SortitionId;
@@ -41,6 +43,7 @@ use stacks_common::util::serde_serializers::prefix_opt_hex;
 use stacks_common::util::serde_serializers::prefix_hex;
 use stacks_common::util::secp256k1::MessageSignature;
 use stacks_common::types::net::PeerAddress;
+use stacks_common::types::StacksEpochId;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -219,6 +222,7 @@ pub struct RPCPeerInfoData {
     pub unanchored_tip: Option<StacksBlockId>,
     pub unanchored_seq: Option<u16>,
     pub exit_at_block_height: Option<u64>,
+    pub tenure_height: u64,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_public_key: Option<StacksPublicKeyBuffer>,
@@ -279,6 +283,114 @@ pub struct RPCSortitionInfo {
     /// In Stacks 2.x, this is the winning block.
     /// In Stacks 3.x, this is the first block of the parent tenure.
     pub committed_block_hash: Option<BlockHeaderHash>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCAccountInfo {
+    pub balance: String,
+    pub locked: String,
+    pub unlock_height: u64,
+    pub nonce: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub balance_proof: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub nonce_proof: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct Account {
+    pub balance: u128,
+    pub locked: u128,
+    pub nonce: u64,
+}
+
+impl TryFrom<RPCAccountInfo> for Account {
+    type Error = std::num::ParseIntError;
+    fn try_from(info: RPCAccountInfo) -> Result<Self, Self::Error> {
+        Ok(Self {
+            balance: u128::from_str_radix(&info.balance[2..], 16)?,
+            locked: u128::from_str_radix(&info.locked[2..], 16)?,
+            nonce: info.nonce,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCPoxCurrentCycleInfo {
+    pub id: u64,
+    pub min_threshold_ustx: u64,
+    pub stacked_ustx: u64,
+    pub is_pox_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCPoxNextCycleInfo {
+    pub id: u64,
+    pub min_threshold_ustx: u64,
+    pub min_increment_ustx: u64,
+    pub stacked_ustx: u64,
+    pub prepare_phase_start_block_height: u64,
+    pub blocks_until_prepare_phase: i64,
+    pub reward_phase_start_block_height: u64,
+    pub blocks_until_reward_phase: u64,
+    pub ustx_until_pox_rejection: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCPoxContractVersion {
+    pub contract_id: String,
+    pub activation_burnchain_block_height: u64,
+    pub first_reward_cycle_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCPoxEpoch {
+    pub epoch_id: StacksEpochId,
+    pub start_height: u64,
+    pub end_height: u64,
+    pub block_limit: ExecutionCost,
+    pub network_epoch: u8,
+}
+
+/// The data we return on GET /v2/pox
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCPoxInfoData {
+    pub contract_id: String,
+    pub pox_activation_threshold_ustx: u64,
+    pub first_burnchain_block_height: u64,
+    pub current_burnchain_block_height: u64,
+    pub prepare_phase_block_length: u64,
+    pub reward_phase_block_length: u64,
+    pub reward_slots: u64,
+    pub rejection_fraction: Option<u64>,
+    pub total_liquid_supply_ustx: u64,
+    pub current_cycle: RPCPoxCurrentCycleInfo,
+    pub next_cycle: RPCPoxNextCycleInfo,
+    pub epochs: Vec<RPCPoxEpoch>,
+    pub current_epoch: StacksEpochId,
+
+    // below are included for backwards-compatibility
+    pub min_amount_ustx: u64,
+    pub prepare_cycle_length: u64,
+    pub reward_cycle_id: u64,
+    pub reward_cycle_length: u64,
+    pub rejection_votes_left_required: Option<u64>,
+    pub next_reward_cycle_in: u64,
+
+    // Information specific to each PoX contract version
+    pub contract_versions: Vec<RPCPoxContractVersion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RPCContractSrc {
+    pub source: String,
+    pub publish_height: u32,
+    #[serde(rename = "proof")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marf_proof: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -1,6 +1,3 @@
-;; TODO: check sequence
-;; TODO: check version -- must be 2
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;           Bitcoin segwit utility module
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -175,18 +172,11 @@
         ;; something else
         0x0000000000000000000000000000000000000000000000000000000000000000)))
 
-;; TODO: remove
-(define-data-var last-outpoint-bytes (buff 4096) 0x)
-(define-data-var last-script-code-bytes (buff 4096) 0x)
-(define-data-var last-value-spent (buff 4096) 0x)
-(define-data-var last-sequence-bytes (buff 4096) 0x)
-
-;; TODO: make read-only
 ;; Compute the segwit signature hash for a given input and spent UTXO's scriptPubKey and amount
 ;; * Only supports p2wsh outputs
 ;; * Does not support OP_CODESEPARATOR
 ;; * Only supports SIGHASH_ALL
-(define-public (segwit-signature-hash
+(define-read-only (segwit-signature-hash
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -231,10 +221,6 @@
         ;; sequence of our input: 4-byte little-endian 
         (sequence-bytes (uint32-to-buff-le (get sequence inp-to-sign)))
     )
-    (var-set last-outpoint-bytes outpoint-bytes)
-    (var-set last-script-code-bytes script-code-bytes)
-    (var-set last-value-spent value-spent)
-    (var-set last-sequence-bytes sequence-bytes)
     (ok (sha256 (sha256 (concat
         (get version-hash-prevouts-hash-sequence signature-hash) (concat
         outpoint-bytes (concat

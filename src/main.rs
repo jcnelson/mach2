@@ -41,13 +41,13 @@ extern crate url;
 
 pub mod bitcoin;
 pub mod cli;
+pub mod devnet;
 pub mod contracts;
 pub mod core;
 pub mod events;
 pub mod net;
 pub mod storage;
-#[cfg(test)]
-pub mod tests;
+pub mod tx;
 
 use std::env;
 use std::process;

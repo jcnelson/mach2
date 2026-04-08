@@ -23,6 +23,7 @@ use stacks_common::deps_common::bitcoin::network::serialize::Error as BtcSeriali
 use stacks_common::util::secp256k1;
 use stacks_common::util::HexError as btc_hex_error;
 use stacks_common::util::hash::DoubleSha256;
+use stacks_common::util::hash::Sha512Trunc256Sum;
 
 use serde::{Serialize, Deserialize};
 
@@ -38,6 +39,7 @@ pub mod wallet;
 
 pub type BitcoinPublicKey = secp256k1::Secp256k1PublicKey;
 
+#[derive(Copy)]
 pub struct Txid(pub [u8; 32]);
 impl_array_newtype!(Txid, u8, 32);
 impl_array_hexstring_fmt!(Txid);
@@ -48,6 +50,19 @@ impl_byte_array_from_column!(Txid);
 pub const TXID_ENCODED_SIZE: u32 = 32;
 
 impl Txid {
+    /// A Stacks transaction ID is a sha512/256 hash (not a double-sha256 hash)
+    pub fn from_stacks_tx(txdata: &[u8]) -> Txid {
+        let h = Sha512Trunc256Sum::from_data(txdata);
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(h.as_bytes());
+        Txid(bytes)
+    }
+    
+    /// A sighash is calculated the same way as a txid
+    pub fn from_sighash_bytes(txdata: &[u8]) -> Txid {
+        Txid::from_stacks_tx(txdata)
+    }
+
     /// Create a [`Txid`] from the tx hash bytes used in bitcoin.
     /// This just reverses the inner bytes of the input.
     pub fn from_bitcoin_tx_hash(tx_hash: &DoubleSha256) -> Self {

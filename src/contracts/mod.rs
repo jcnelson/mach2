@@ -19,6 +19,9 @@ use clarity::vm::ClarityVersion;
 use crate::util::vm::vm_execute;
 use crate::util::vm::Error as VmError;
 
+#[cfg(test)]
+mod tests;
+
 pub const BITCOIN_CONTRACT : &'static str = include_str!("./bitcoin.clar");
 pub const SEGWIT_CONTRACT : &'static str = include_str!("./segwit.clar");
 pub const WITNESS_SCRIPT_CONTRACT : &'static str = include_str!("./witness.clar");

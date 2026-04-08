@@ -38,12 +38,14 @@ version = "0.0.1"
 features = ["rusqlite", "developer-mode"]
 path = "./stacks-core/clarity"
 
+[dev-dependencies]
+regex = "1.12.3"
+mockito = "1.5"
+
 [target.'cfg(all(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"), not(any(target_os="windows"))))'.dependencies]
 sha2 = { version = "0.10", features = ["asm"] }
 
 [target.'cfg(any(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")), any(target_os="windows")))'.dependencies]
 sha2 = { version = "0.10" }
 
-[dev-dependencies]
-mockito = "1.5"
 

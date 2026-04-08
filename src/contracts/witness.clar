@@ -40,7 +40,7 @@
 
 ;; Create a multisig script out of keys for a cosigner.
 ;; It must have at least 2/3 threshold.
-(define-read-only (make-cosigner-multisig-script (keys (list 11 (buff 33))))
+(define-read-only (make-cosigner-multisig-script (keys (list 10 (buff 33))))
     (let (
         (threshold (if (< (len keys) u4)
             (len keys)

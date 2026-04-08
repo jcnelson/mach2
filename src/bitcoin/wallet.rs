@@ -407,7 +407,7 @@ impl BitcoinClient {
     ///  to the bitcoin single sig addresses corresponding to `pks` in a round robin fashion.
     #[cfg(test)]
     pub fn bootstrap_chain_to_pks(&self, num_blocks: u64, pks: &[Secp256k1PublicKey]) {
-        m2_info!("Creating wallet if it does not exist");
+        m2_debug!("Creating wallet if it does not exist");
         if let Err(e) = self.create_wallet_if_dne() {
             m2_error!("Error when creating wallet: {e:?}");
         }
@@ -632,7 +632,7 @@ impl UTXOSet {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UTXO {
     pub txid: DoubleSha256,
     pub vout: u32,
@@ -677,7 +677,7 @@ pub mod tests {
     use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 
     use super::*;
-    use crate::tests::BitcoinCoreController;
+    use crate::devnet::BitcoinCoreController;
 
     pub mod utils {
         use std::net::TcpListener;
@@ -694,17 +694,19 @@ pub mod tests {
             config.bitcoin.network_id = BitcoinNetworkType::Regtest;
             config.bitcoin.username = Some(String::from("user"));
             config.bitcoin.password = Some(String::from("12345"));
+            
             // overriding default "0.0.0.0" because doesn't play nicely on Windows.
             config.bitcoin.peer_host = String::from("127.0.0.1");
+            
             // avoiding peer port biding to reduce the number of ports to bind to.
             config.bitcoin.peer_port = 0;
 
             let random_bytes_16 : [u8; 16] = [thread_rng().gen(); 16];
             config.bitcoin.datadir = format!("{}/mach2-bitcoin-datadir-{}", temp_dir().display(), to_hex(&random_bytes_16));
 
-            //Ask the OS for a free port. Not guaranteed to stay free,
-            //after TcpListner is dropped, but good enough for testing
-            //and starting bitcoind right after config is created
+            // Ask the OS for a free port. Not guaranteed to stay free,
+            // after TcpListner is dropped, but good enough for testing
+            // and starting bitcoind right after config is created
             let tmp_listener =
                 TcpListener::bind("127.0.0.1:0").expect("Failed to bind to get a free port");
             let port = tmp_listener.local_addr().unwrap().port();
@@ -793,7 +795,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -822,14 +824,14 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
 
         btc_controller
             .create_wallet_if_dne()
-            .expect("Wallet should now exists!");
+            .expect("Wallet should now exist!");
 
         let wallets = btc_controller.list_wallets().unwrap();
         assert_eq!(1, wallets.len());
@@ -850,7 +852,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("Failed starting bitcoind");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -878,7 +880,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("Failed starting bitcoind");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -916,7 +918,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("Failed starting bitcoind");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -943,7 +945,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -984,7 +986,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let miner1_btc_controller = BitcoinClient::new(config.clone());
@@ -1022,7 +1024,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1068,7 +1070,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1097,7 +1099,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1125,7 +1127,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1159,7 +1161,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1188,7 +1190,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1217,7 +1219,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());
@@ -1250,7 +1252,7 @@ pub mod tests {
 
         let mut btcd_controller = BitcoinCoreController::from_config(&config);
         btcd_controller
-            .start_bitcoind()
+            .start()
             .expect("bitcoind should be started!");
 
         let btc_controller = BitcoinClient::new(config.clone());

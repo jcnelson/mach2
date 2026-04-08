@@ -23,6 +23,7 @@ use std::{io, mem};
 use std::fmt;
 use std::net::SocketAddr;
 
+use clarity::vm::types::PrincipalData;
 use clarity_types::types::{QualifiedContractIdentifier, StandardPrincipalData};
 use clarity_types::ContractName;
 use sha2::{Digest, Sha512_256};
@@ -44,8 +45,10 @@ use stacks_common::util::secp256k1::{
 };
 use stacks_common::types::{PrivateKey, PublicKey};
 
+use crate::bitcoin::Txid;
 use crate::net::*;
 use crate::util::string::UrlString;
+use crate::tx::StacksTransaction;
 
 use rand::thread_rng;
 use rand::Rng;
@@ -323,8 +326,99 @@ pub fn run_get_sortition_info(
     )?;
 
     let response: Vec<RPCSortitionInfo> = serde_json::from_slice(&bytes)
-        .map_err(|_| Error::DeserializeError("Failed to decode /v2/info response".into()))?;
+        .map_err(|_| Error::DeserializeError("Failed to decode /v3/sortitions response".into()))?;
 
     Ok(response)
 }
 
+/// Get account
+pub fn run_get_account(
+    node_addr: &SocketAddr,
+    addr: &PrincipalData
+) -> Result<Account, Error> {
+    let mut sock = TcpStream::connect(node_addr)
+        .map_err(Error::IO)?;
+    let bytes = run_http_request(
+        &mut sock,
+        node_addr,
+        "GET",
+        &format!("/v2/accounts/{}?proof=0", addr),
+        None,
+        None,
+        &[],
+    )?;
+
+    let acct_info: RPCAccountInfo = serde_json::from_slice(&bytes)
+        .map_err(|_| Error::DeserializeError("Failed to decode /v2/accounts response".into()))?;
+
+    let acct : Account = acct_info.try_into().map_err(|e| Error::DeserializeError(format!("Failed to decode RPCAccountInfo: {e:?}") ))?;
+    Ok(acct)
+}
+
+/// Submit a stacks transaction
+pub fn run_post_transaction(
+    node_addr: &SocketAddr,
+    tx: &StacksTransaction
+) -> Result<Txid, Error> {
+    let mut sock = TcpStream::connect(node_addr)
+        .map_err(Error::IO)?;
+    let tx_bytes = tx.serialize_to_vec();
+    let bytes = run_http_request(
+        &mut sock,
+        node_addr,
+        "POST",
+        "/v2/transactions".into(),
+        Some("application/octet-stream"),
+        None,
+        &tx_bytes
+    )?;
+
+    let txid : Txid = serde_json::from_slice(&bytes)
+        .map_err(|_| Error::DeserializeError("Failed to decode txid from /v2/transactions response".into()))?;
+
+    Ok(txid)
+}
+
+/// Get PoX info
+pub fn run_get_pox(
+    node_addr: &SocketAddr
+) -> Result<RPCPoxInfoData, Error> {
+    let mut sock = TcpStream::connect(node_addr)
+        .map_err(Error::IO)?;
+    let bytes = run_http_request(
+        &mut sock,
+        node_addr,
+        "GET",
+        "/v2/pox".into(),
+        None,
+        None,
+        &[],
+    )?;
+    let pox_info: RPCPoxInfoData = serde_json::from_slice(&bytes)
+        .map_err(|_| Error::DeserializeError("Failed to decode /v2/pox response".into()))?;
+
+    Ok(pox_info)
+}
+
+/// Get a smart contract's code
+pub fn run_get_contract_code(
+    node_addr: &SocketAddr,
+    address: &StacksAddress,
+    name: &str
+) -> Result<RPCContractSrc, Error> {
+    let mut sock = TcpStream::connect(node_addr)
+        .map_err(Error::IO)?;
+    let bytes = run_http_request(
+        &mut sock,
+        node_addr,
+        "GET",
+        &format!("/v2/contracts/source/{address}/{name}"),
+        None,
+        None,
+        &[],
+    )?;
+    let contract_src: RPCContractSrc = serde_json::from_slice(&bytes)
+        .map_err(|_| Error::DeserializeError("Failed to decode /v2/contracts/:address/:name response".into()))?;
+
+    Ok(contract_src)
+}

@@ -36,6 +36,9 @@
 (define-constant ERR_BTC_TOO_MANY_INPUTS u31)
 (define-constant ERR_BTC_MISMATCHED_WITNESSES u32)
 (define-constant ERR_TX_UTXO_WRONG_OWNER u33)
+(define-constant ERR_TX_UTXO_WRONG_USER_PUBKEY u33)
+(define-constant ERR_NO_SUCH_TX u34)
+(define-constant ERR_MULTIPLE_PROVIDERS u35)
 
 (define-constant SINGLESIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x16 0x1a))
 (define-constant MULTISIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x14 0x15))
@@ -52,7 +55,7 @@
     principal
     {
         dag-spend-script: (buff 1376),
-        dag-keys: (list 11 (buff 33)),
+        dag-keys: (list 10 (buff 33)),
     })
 
 ;; All cosigner keys in use (since they cannot be reused across registrations).
@@ -68,57 +71,11 @@
         dag-keys: (list )
     })
 
-;; Get tx-sender if it is a standard principal and is the contract caller.
-;; Return (err ERR_NOT_TOPLEVEL) if the caller isn't top-level
-(define-read-only (get-toplevel-addr)
-    (if (and (is-standard tx-sender) (is-eq contract-caller tx-sender))
-        (ok tx-sender)
-        (err ERR_NOT_TOPLEVEL)))
-
-;; Iterator to determine if a cosigner key is used
-(define-private (check-cosigner-keys-used
-    (key (buff 33))
-    (result bool))
-
-    (if result
-        (and result (is-none (map-get? cosigner-keys key)))
-        result))
-
-;; Iterator to mark a cosigner key as used
-(define-private (set-cosigner-keys-used
-    (key (buff 33))
-    (cosigner-addr principal))
-
-    (begin
-    (map-set cosigner-keys key cosigner-addr)
-    cosigner-addr))    
-
-;; Top-level function to register a cosigner.
-;; All keys in `dag-keys` must be heretofor unused.
-;; This can only be called via a top-level contract-call.
-;; The caller will be the cosigner principal.
-(define-public (register-cosigner (dag-keys (list 11 (buff 33))))
-    (let (
-        (cosigner-addr (try! (get-toplevel-addr)))
-        (dag-keys-unused (try! (if (fold check-cosigner-keys-used dag-keys true) (ok true) (err ERR_COSIGNER_KEY_ALREADY_USED))))
-        (cosigner-dag-script (make-cosigner-multisig-script dag-keys))
-    )
-
-    (asserts! (map-insert cosigner-info
-        cosigner-addr
-        {
-            dag-spend-script: cosigner-dag-script,
-            dag-keys: dag-keys,
-        })
-        (err ERR_COSIGNER_EXISTS))
-
-    (fold set-cosigner-keys-used dag-keys tx-sender)
-    (ok true)))
-
 ;; All decoded transactions.
-;; * for peg-ins, these are transactions that have been confirmed to have been mined
-;; * for contract transfers, these are decoded off-chain transactions which correspond to entries in the DAG.
-;; Keyed by the little-endian wtxid (the reverse of what you see on an explorer)
+;; Note that transactions here may not be fully-signed when inserted.
+;; The key is the little-endian wtxid of the transaction _at the moment of insertion_ 
+;; -- i.e. possibly without signatures.
+;; (note that explorers show the big-endian wtxid)
 (define-map decoded-transactions
     (buff 32)
     {
@@ -151,6 +108,11 @@
         }
     })
 
+;; Map wtxids to their txids
+(define-map wtxid-to-txid
+    (buff 32)
+    (buff 32))
+
 ;; All DAG UTXOs, keyed by outpoint.
 ;; Deleted when spent.
 (define-map utxos
@@ -178,18 +140,6 @@
         provider: principal
     })
 
-;; Time-series index of DAG operations (peg-ins and transfers).
-;; Used by cosigner replicas to audit this contract's materialized views.
-(define-map redemption-log
-    ;; the ith peg-in or transfer
-    uint
-    ;; pointer into redemption-dag for the corresponding wtx.
-    ;; for partially-signed transfers, this is the little-endian wtxid of the user-signed PSBT (i.e. missing cosigner signatures)
-    (buff 32)
-)
-
-(define-data-var redemption-log-length uint u0)
-
 ;; Materialized view of scBTC provider state
 (define-map btc-providers
     ;; Stacks principal identified in the witness script of the peg-in (i.e. from its marker payload).
@@ -202,7 +152,20 @@
         ;; when this provider's BTC expires
         expires: uint
     })  
- 
+
+;; Get a UTXO if it is unexpired
+(define-read-only (get-utxo
+    (utxo-ptr { txid: (buff 32), vout: uint })
+    (cur-btc-height uint))
+
+    (let (
+        (utxo (unwrap! (map-get? utxos utxo-ptr)
+            (err ERR_TX_NO_UTXO)))
+    )
+    (asserts! (< (get expires utxo) cur-btc-height)
+        (err ERR_BTC_EXPIRED))
+    (ok utxo)))
+
 ;; Materialized view of scBTC balances
 (define-map balances
     ;; Stacks principal who owns the scBTC
@@ -210,27 +173,57 @@
     ;; balances from each provider (indexes btc-providers)
     (list 1024 { provider: principal, amount: uint, expires: uint }))
 
-;; Store a partially-signed contract transfer.
-;; One transfer per provider.
-;; The provider must already be defined.
-;; NOTE: the `wtxid` will not commit to the cosigner signatures; these are provided separately
-(define-private (store-contract-transfer-psbt
-    (wtxid (buff 32))
-    (provider principal)
-    (btc-block-height uint))
 
+;; Get tx-sender if it is a standard principal and is the contract caller.
+;; Return (err ERR_NOT_TOPLEVEL) if the caller isn't top-level
+(define-read-only (get-toplevel-addr)
+    (if (and (is-standard tx-sender) (is-eq contract-caller tx-sender))
+        (ok tx-sender)
+        (err ERR_NOT_TOPLEVEL)))
+
+
+;; Iterator to determine if a cosigner key is used
+(define-private (check-cosigner-keys-used
+    (key (buff 33))
+    (result bool))
+
+    (if result
+        (and result (is-none (map-get? cosigner-keys key)))
+        result))
+
+
+;; Iterator to mark a cosigner key as used
+(define-private (set-cosigner-keys-used
+    (key (buff 33))
+    (cosigner-addr principal))
+
+    (begin
+    (map-set cosigner-keys key cosigner-addr)
+    cosigner-addr))    
+
+
+;; Top-level function to register a cosigner.
+;; All keys in `dag-keys` must be heretofor unused.
+;; This can only be called via a top-level contract-call.
+;; The caller will be the cosigner principal.
+(define-public (register-cosigner (dag-keys (list 10 (buff 33))))
     (let (
-        (provider-info (unwrap! (map-get? btc-providers provider) (err ERR_NO_PROVIDER)))
-        (log-len (var-get redemption-log-length))
-        (new-log-len (+ u1 log-len))
+        (cosigner-addr (try! (get-toplevel-addr)))
+        (dag-keys-unused (try! (if (fold check-cosigner-keys-used dag-keys true) (ok true) (err ERR_COSIGNER_KEY_ALREADY_USED))))
+        (cosigner-dag-script (make-cosigner-multisig-script dag-keys))
     )
-    (map-set redemption-dag wtxid {
-        tx-type: DAG_TX_CONTRACT_TRANSFER,
-        provider: provider
-    })
-    (map-set redemption-log new-log-len wtxid)
-    (var-set redemption-log-length new-log-len)
+
+    (asserts! (map-insert cosigner-info
+        cosigner-addr
+        {
+            dag-spend-script: cosigner-dag-script,
+            dag-keys: dag-keys,
+        })
+        (err ERR_COSIGNER_EXISTS))
+
+    (fold set-cosigner-keys-used dag-keys tx-sender)
     (ok true)))
+
 
 (define-read-only (balance-adder
     (balance-item { provider: principal, amount: uint, expires: uint })
@@ -240,15 +233,17 @@
         (merge ctx { sum: (+ (get amount balance-item) (get sum ctx)) })
         ctx))
 
-;; Get the balance of a user at a particular Bitcoin block height
-(define-read-only (get-balance (user principal) (btc-block-height uint))
+
+;; Get the balance of a UTXO owner at a particular Bitcoin block height
+(define-read-only (get-balance (owner principal) (btc-block-height uint))
     (let (
-        (user-balances (default-to (list ) (map-get? balances user)))
+        (owner-balances (default-to (list ) (map-get? balances owner)))
     )
     (get sum
         (fold balance-adder
-            user-balances
+            owner-balances
             { btc-block-height: btc-block-height, sum: u0 }))))
+
 
 ;; Look up a BTC provider's information at a given bitcoin block height
 ;; Returns (err ERR_BTC_EXPIRED) if the provider record exists, but it expired before the given height.
@@ -263,6 +258,7 @@
                 (err ERR_BTC_EXPIRED))
         ;; do not have provider
         (err ERR_NO_PROVIDER)))
+
 
 ;; Iterator to search a list of keys to find if it produced the given signature over the given message.
 ;; If found, update `ctx` to have `found = true`.
@@ -284,12 +280,13 @@
                 (merge ctx { i: (+ u1 (get i ctx)) })))
             err-code (merge ctx { valid: false }))))
 
+
 ;; Check a signature against a script hash, as part of verifying that a given key signed a given transaction segwit signature hash.
 ;; Each signature must be 65 bytes, even though the given `witness-sig` allows up to 1376. This is because `witness-sig` is a 
 ;; witness stack item.
 (define-private (check-sig-iter
     (witness-sig (buff 1376))
-    (ctx { keys: (list 11 (buff 33)), used: (list 11 bool), signature-hash: (buff 32), valid: bool }))
+    (ctx { keys: (list 10 (buff 33)), used: (list 10 bool), signature-hash: (buff 32), valid: bool }))
     
     (if (not (get valid ctx))
         ;; already failed
@@ -312,6 +309,7 @@
                     ;; not used yet
                     (merge ctx { used: (unwrap-panic (replace-at? (get used ctx) (get i result) true)) })))))))
 
+
 ;; Check that a list of witness stack items is a well-formed signature
 (define-read-only (check-wellformed-witness-sig-iter
     (witness-sig (buff 1376))
@@ -320,6 +318,7 @@
     (if (not valid)
         valid
         (and valid (is-eq (len witness-sig) u65))))
+
 
 ;; Is a witness stack well-formed?
 ;; It must have at least four items.
@@ -341,14 +340,16 @@
             (err ERR_TX_MALFORMED_WITNESS))
         (err ERR_TX_NO_WITNESS_DATA)))
 
+
 ;; Check the user and cosigner signatures from a given witness against the segwit signature hash.
+;; Pass an empty list for `cosigner-dag-keys` to only check the user signature.
 ;; Returns (ok true) on success
 ;; Returns (err ..) on signature verification falure, or if the witness was malformed
 (define-read-only (check-signatures
     (witness (list 13 (buff 1376)))
     (segwit-sighash (buff 32))
     (user-pubkey (buff 33))
-    (cosigner-dag-keys (list 11 (buff 33))))
+    (cosigner-dag-keys (list 10 (buff 33))))
 
     (let ( 
         (witness-valid (try! (is-witness-stack-wellformed? witness)))
@@ -358,17 +359,20 @@
         (user-witness-sig (unwrap-panic (element-at? witness (- u1 (len witness)))))
         
         ;; cosigner signature check
+        ;; (no-op if `cosigner-dag-keys` length is 0)
         (cosigner-dag-sig-check
-            (fold check-sig-iter cosigner-witness-sigs {
-                keys: cosigner-dag-keys,
-                used: (list false false false false false false false false false false false),
-                signature-hash: segwit-sighash,
-                valid: true
-            }))
+            (if (> (len cosigner-dag-keys) u0)
+                (get valid (fold check-sig-iter cosigner-witness-sigs {
+                    keys: cosigner-dag-keys,
+                    used: (list false false false false false false false false false false),
+                    signature-hash: segwit-sighash,
+                    valid: true
+                }))
+                true))
 
         ;; bail early if the cosigner signature is invalid
         (cosigner-sig-valid (try!
-            (if (get valid cosigner-dag-sig-check)
+            (if cosigner-dag-sig-check
                 (ok true)
                 (err ERR_TX_INVALID_COSIGNER_SIGNATURE))))
 
@@ -387,14 +391,14 @@
 
     (ok true)))
 
-;; TODO: make read-only
+
 ;; Authenticate a particular txin
 ;; * The input has to have a corresponding UTXO in the `utxos` map
 ;; * The input's witness script must exist and must match the UTXO's computed witness script
 ;; * The cosigner must have signed it with its DAG transfer keys
 ;; * The given user key must have signed each input
 ;; * The UTXO must have the given provider 
-(define-public (inner-check-consumed-utxo
+(define-read-only (inner-check-consumed-utxo
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -412,7 +416,7 @@
     (owner principal)
     (input-index uint)
     (user-pubkey (buff 33))
-    (cosigner-dag-keys (list 11 (buff 33)))
+    (cosigner-dag-keys (list 10 (buff 33)))
     (provider principal)
     (cur-btc-height uint))
     
@@ -422,15 +426,8 @@
 
         (outpoint (get outpoint in))
         (utxo-pointer { txid: (get hash outpoint), vout: (get index outpoint) })
-        (utxo (unwrap! (map-get? utxos utxo-pointer)
-            (err ERR_TX_NO_UTXO)))
+        (utxo (try! (get-utxo utxo-pointer cur-btc-height)))
         (spent-amount (get amount utxo))
-
-        ;; bail early if the UTXO is expired
-        (is-expired (try!
-            (if (< (get expires utxo) cur-btc-height)
-                (ok true)
-                (err ERR_BTC_EXPIRED))))
 
         ;; bail early if the provider is wrong
         (provider-valid (try!
@@ -483,11 +480,11 @@
     ;; if we get here, then the UTXO was rightly consumed 
     (ok (merge utxo { pointer: utxo-pointer }))))
 
-;; TODO: make read-only
+
 ;; Check that a given input in txdata has been signed by the cosigner DAG keys and the user key
 ;; obtained from the input's corresponding UTXO.  Check also that the input is well-formed -- i.e.
 ;; its witness script matches the UTXO's scriptPubKey, and its witness stack is well-formed, etc.
-(define-private (check-consumed-utxo
+(define-read-only (check-consumed-utxo
     (input-index uint)
     (txdata {
         ins: (list 16 {
@@ -515,7 +512,7 @@
         }),
         owner: principal,
         user-pubkey: (buff 33),
-        cosigner-dag-keys: (list 11 (buff 33)),
+        cosigner-dag-keys: (list 10 (buff 33)),
         provider: principal,
         valid: bool,
         errors: (list 16 uint),
@@ -523,7 +520,16 @@
     }))
 
     (if (get valid txdata)
-        (match (inner-check-consumed-utxo (get ins txdata) (get outs txdata) (get signature-hash txdata) (get owner txdata) input-index (get user-pubkey txdata) (get cosigner-dag-keys txdata) (get provider txdata) (get cur-btc-height txdata))
+        (match (inner-check-consumed-utxo
+                (get ins txdata)
+                (get outs txdata)
+                (get signature-hash txdata)
+                (get owner txdata)
+                input-index
+                (get user-pubkey txdata)
+                (get cosigner-dag-keys txdata)
+                (get provider txdata)
+                (get cur-btc-height txdata))
             ok-utxo
                 (merge txdata { utxos: (unwrap-panic (as-max-len? (append (get utxos txdata) ok-utxo) u16)) })
             err-val
@@ -533,11 +539,14 @@
                     (merge txdata { valid: false, errors: (unwrap-panic (as-max-len? (append (get errors txdata) err-val) u16)) })))
         txdata))
 
+
 ;; Find and authenticate the senders of a given transfer transaction
-;; * Each input has to have a UTXO
-;; * The input must consume the UTXO
-;; * The given signatures must match the transaction
-;; * Each UTXO must match the given expected provider
+;; * Each input must consume an existing UTXO
+;; * Each UTXO must match the given `provider`
+;; * Each UTXO must be unexpired as of `cur-btc-height`
+;; * Each input's witness stack must be well-formed
+;; * Each input must contain a user signature, validated by `user-pubkey`
+;; * Each input must contain a cosigner signature, validated by `cosigner-dag-keys`
 (define-private (get-consumed-utxos
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
@@ -555,7 +564,7 @@
     })
     (owner principal)
     (user-pubkey (buff 33))
-    (cosigner-dag-keys (list 11 (buff 33)))
+    (cosigner-dag-keys (list 10 (buff 33)))
     (provider principal)
     (cur-btc-height uint))
 
@@ -647,6 +656,7 @@
             (unwrap-panic (as-max-len? (concat before after) u1024))))
         (list )))))
 
+
 ;; Delete UTXOs and deduct the correspoding balance from the user's balance vector
 ;; Panics if the user's balance is less than the UTXO.
 (define-private (delete-utxo-iter
@@ -668,6 +678,7 @@
     (map-set balances (get owner utxo) new-balances)
     (map-delete utxos (get pointer utxo))))
 
+
 ;; Execute a fully-signed scBTC transfer.
 ;; The transaction must already be decoded and stored.
 ;; All UTXOs the transaction consumes will be removed, and all
@@ -682,28 +693,45 @@
 ;;
 ;; Only a cosigner can call this, and will call this potentially after the user 
 ;; has published the decoded tx to `decoded-transactions`
-(define-private (inner-contract-transfer
-    (wtxid (buff 32))       ;; NOTE: this is the little-endian wtxid (reversed of what you see on an explorer)
+(define-private (process-contract-transfer
+    (decoded-tx {
+        version: uint,
+        segwit-marker: uint,
+        segwit-version: uint,
+        txid: (buff 32),
+        ins: (list 16 {
+            outpoint: { hash: (buff 32), index: uint },
+            scriptSig: (buff 1376),
+            sequence: uint,
+            witness: (list 13 (buff 1376)),
+        }),
+        outs: (list 50 {
+            value: uint,
+            scriptPubKey: (buff 1376)
+        }),
+        locktime: uint,
+        signature-hash: {
+            version-hash-prevouts-hash-sequence: (buff 68),
+            hash-outputs-locktime-sighash: (buff 40)
+        }
+    })
+    (cosigner-rec {
+        dag-spend-script: (buff 1376),
+        dag-keys: (list 10 (buff 33)),
+    })
     (owner principal)
     (user-pubk (buff 33))
     (provider principal)
     (btc-block-height uint))
 
     (let (
-        ;; only a cosigner can call this
-        (cosigner-addr (try! (get-toplevel-addr)))
-        (cosigner-rec (unwrap! (map-get? cosigner-info cosigner-addr) (err ERR_NO_SUCH_COSIGNER)))
-
-        (decoded-tx (unwrap! (map-get? decoded-transactions wtxid) (err ERR_NO_BTC_TRANSACTION)))
-        (txid (get txid decoded-tx))
-
         ;; provider must exist and must be unexpired
         (provider-info (try! (get-provider-info provider btc-block-height)))
 
         ;; each input to this transaction must:
         ;; * have been signed by user-pubk
         ;; * have been signed by the given cosigner
-        ;; * have the same, given provider
+        ;; * have the same given provider
         ;; * have not expired at the given btc-block-height
         (consumed-utxos (try! (get-consumed-utxos
             (get ins decoded-tx)
@@ -727,15 +755,18 @@
 
     (ok true)))
 
+
 ;; from bitcoin.clar
 (define-private (reverse-buff16 (input (buff 16)))
    (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? (buff-to-uint-le input))) u1 u17)))
+
 
 ;; from bitcoin.clar
 (define-read-only (reverse-buff32 (input (buff 32)))
    (unwrap-panic (as-max-len? (concat
    (reverse-buff16 (unwrap-panic (as-max-len? (unwrap-panic (slice? input u16 u32)) u16)))
    (reverse-buff16 (unwrap-panic (as-max-len? (unwrap-panic (slice? input u0 u16)) u16)))) u32)))
+
 
 ;; Compute the pegin witness script from the decoded pegin witness script
 ;; Compose witness script as:
@@ -764,6 +795,7 @@
 
     (make-pegin-witness-script cosigner-dag-spend-script witness-data)))
 
+
 (define-private (merge-witness-and-txin
     (inp {
         outpoint: { hash: (buff 32), index: uint },
@@ -778,6 +810,7 @@
         sequence: (get sequence inp),
         witness: witness
     })
+
 
 ;; Decode a Bitcoin tx and its witness data.
 ;; If there is a decode error, then store the decode error to `last-btc-decode-error`
@@ -809,10 +842,65 @@
             }))
         err-decode (err ERR_TX_DECODE_ERROR)))
 
+
+;; Store a parsed transaction 
+(define-private (store-parsed-wtx
+    (wtxid (buff 32))   ;; NOTE: little-endian!
+    (decoded-tx {
+        version: uint,
+        segwit-marker: uint,
+        segwit-version: uint,
+        txid: (buff 32),
+        ins: (list 16 {
+            outpoint: { hash: (buff 32), index: uint },
+            scriptSig: (buff 1376),
+            sequence: uint,
+            witness: (list 13 (buff 1376)),
+        }),
+        outs: (list 50 {
+            value: uint,
+            scriptPubKey: (buff 1376)
+        }),
+        locktime: uint,
+        signature-hash: {
+            version-hash-prevouts-hash-sequence: (buff 68),
+            hash-outputs-locktime-sighash: (buff 40)
+        }
+    }))
+
+    (begin
+        (asserts! (map-insert decoded-transactions wtxid decoded-tx)
+            (err ERR_TX_ALREADY_EXISTS))
+
+        ;; should never fail
+        (unwrap-panic (if (map-insert wtxid-to-txid wtxid (get txid decoded-tx))
+            (ok true)
+            (err ERR_TX_ALREADY_EXISTS)))
+
+        (ok true)))
+    
+
+;; Parse and store a transaction
+(define-private (parse-and-store-wtx
+    (wtx (buff 4096)))
+
+    (let (
+        (decoded-tx (try! (decode-bitcoin-wtx wtx)))
+        (wtxid (sha256 (sha256 wtx)))
+    )
+    (try! (store-parsed-wtx wtxid decoded-tx))
+    (ok wtxid)))
+
+
+;; Do we already have this transaction?
+(define-read-only (has-transaction? (wtxid (buff 32)))
+    (is-some (map-get? wtxid-to-txid wtxid)))
+
+
 ;; Authenticate and store an on-chain segwit transaction for a peg-in.
 ;; Anyone can call this, but only cosigner-approved transactions will be added to the DAG.
 ;;
-;; Returns (ok true) on success
+;; Returns (ok (buff 32)) on success, containing the wtxid
 ;; Returns (err uint) on failure, and sets last-btc-decode-error if the error was due to a decoding failure
 (define-private (inner-auth-and-store-pegin-tx
     (btc-height uint)
@@ -839,29 +927,9 @@
                 witness-reserved-value
                 btc-coinbase-tx
                 btc-coinbase-proof)))
-
-        ;; little-endian wtxid, which we use in this system
-        (wtxid (reverse-buff32 wtxid-be))
-        (decoded-tx (try! (decode-bitcoin-wtx wtx)))
     )
-    (asserts! (map-insert decoded-transactions wtxid decoded-tx)
-        (err ERR_TX_ALREADY_EXISTS))
+    (parse-and-store-wtx wtx)))
 
-    (ok true)))
-
-;; Authenticate and store an off-chain segwit transaction for a transfer (either for users or contracts)
-;; Anyone can call this, but only cosigner-approved transactions will be added to the DAG.
-;; Returns (ok true) on success
-;; Returns (err uint) on failure, and sets last-btc-decode-error if the error was due to a decoding failure
-(define-private (inner-store-transfer (wtx (buff 4096)))
-    (let (
-        (wtxid (sha256 (sha256 wtx)))
-        (decoded-tx (try! (decode-bitcoin-wtx wtx)))
-    )
-    (asserts! (map-insert decoded-transactions wtxid decoded-tx)
-        (err ERR_TX_ALREADY_EXISTS))
-
-    (ok true)))
 
 ;; Remove all balance items that are expired
 (define-private (retain-fresh-balances
@@ -873,6 +941,7 @@
             fresh: (unwrap-panic (as-max-len? (append (get fresh ctx) balance-item) u1024))
         })
         ctx))
+
 
 ;; Find the index of a provider balance
 (define-private (find-provider-balance-index
@@ -886,6 +955,7 @@
             found: (if (is-eq (get provider ctx) (get provider balance-item)) (some (get i ctx)) none)
         })))
  
+
 ;; Insert or update a new balance into a given recipient's balance vector.
 ;; Do not store it; return the balance vector instead so the caller can store it.
 (define-read-only (make-user-balance-vec
@@ -916,10 +986,14 @@
 
     (ok new-balances)))
 
+
 ;; Materialize the UTXO for an already-authenticated and stored pegin transaction.
 ;; This is only called by the cosigner.
 ;; Caller must check that only the cosigner can call this.
+;; Returns (ok (buff 32)) on success with the little-endian wtxid
+;; Returns (err ..) on failure
 (define-private (inner-register-pegin-utxo
+    (cosigner-addr principal)
     (cur-btc-height uint)
     (wtxid (buff 32))
     (pegin-output uint)
@@ -931,7 +1005,6 @@
     }))
 
     (let (
-        (cosigner-addr (try! (get-toplevel-addr)))
         (recipient-principal (get recipient-principal witness-data))
         (locktime (get locktime witness-data))
         (safety-margin (get safety-margin witness-data))
@@ -993,10 +1066,14 @@
             (err u0)))
 
     (map-set balances recipient-principal new-user-balance-vec)
-    (ok true))))
+    (ok wtxid))))
+
 
 ;; Carry out a peg-in on an already-stored authenticated witness transaction.
 ;; Called only by the cosigner.
+;;
+;; Returns (ok (buff 32)) with the little-endian wtxid on success
+;; Returns (err ..) on failure
 (define-public (register-pegin-utxo
     (wtxid (buff 32))
     (pegin-output uint)
@@ -1011,4 +1088,56 @@
         (cosigner-addr (try! (get-toplevel-addr)))
     )
 
-    (inner-register-pegin-utxo burn-block-height wtxid pegin-output witness-data)))
+    ;; (note that this will fail if `cosigner-addr` isn't registered)
+    (inner-register-pegin-utxo cosigner-addr burn-block-height wtxid pegin-output witness-data)))
+
+
+;; Register a peg-in transaction and register a UTXO within it.
+;; Only the cosigner can call this, since the cosigner takes responsibility for this.
+;; 
+;; Returns (ok (buff 32)) with the little-endian wtxid on success
+;; Returns (err ..) on failure
+(define-public (register-pegin
+    ;; the transaction
+    (wtx (buff 4096))
+    ;; proof info
+    (btc-header (buff 80))
+    (btc-tx-index uint)
+    (tree-depth uint)
+    (wproof (list 14 (buff 32)))
+    (witness-merkle-root (buff 32))
+    (witness-reserved-value (buff 32))
+    (btc-coinbase-tx (buff 4096))
+    (btc-coinbase-proof (list 14 (buff 32)))
+    ;; the UTXO
+    (pegin-output uint)
+    (witness-data {
+        recipient-principal: principal,
+        user-pubkey: (buff 33),
+        locktime: uint,
+        safety-margin: uint
+    }))
+
+    (let (
+        ;; this must be called top-level by a cosigner
+        (cosigner-addr (try! (get-toplevel-addr)))
+
+        ;; decode and store the tx
+        (wtxid (try! (inner-auth-and-store-pegin-tx
+            burn-block-height
+            wtx 
+            btc-header
+            btc-tx-index
+            tree-depth
+            wproof
+            witness-merkle-root
+            witness-reserved-value
+            btc-coinbase-tx
+            btc-coinbase-proof
+        )))
+    )
+
+    ;; try and register the UTXO
+    ;; (note that this will fail if `cosigner-addr` isn't registered)
+    (inner-register-pegin-utxo cosigner-addr burn-block-height wtxid pegin-output witness-data)))
+

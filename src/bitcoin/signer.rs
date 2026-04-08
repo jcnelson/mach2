@@ -1,5 +1,6 @@
 // Copyright (C) 2013-2020 Blockstack PBC, a public benefit corporation
-// Copyright (C) 2020-2025 Stacks Open Internet Foundation
+// Copyright (C) 2020-2026 Stacks Open Internet Foundation
+// Copyright (C) 2026 Trust Machines
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -54,7 +55,7 @@ impl BitcoinOpSigner {
 
     /// Create a secret key from some state.
     /// Returns the bytes that can be fed into Secp256k1PrivateKey
-    fn make_secret_key_from_bytes(seed: &[u8]) -> Secp256k1PrivateKey {
+    pub fn make_secret_key_from_bytes(seed: &[u8]) -> Secp256k1PrivateKey {
         let mut re_hashed_seed = seed.to_vec();
         loop {
             match Secp256k1PrivateKey::from_slice(&re_hashed_seed[..]) {
@@ -198,7 +199,7 @@ mod tests {
     #[test]
     fn test_get_public_key() {
         let priv_key_hex = "0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d";
-        let expected_hex = "04d0de0aaeaefad02b8bdc8a01a1b8b11c696bd3d66a2c5f10780d95b7df42645cd85228a6fb29940e858e7e55842ae2bd115d1ed7cc0e82d934e929c97648cb0a";
+        let expected_hex = "02d0de0aaeaefad02b8bdc8a01a1b8b11c696bd3d66a2c5f10780d95b7df42645c";
 
         let secp_k = Secp256k1PrivateKey::from_hex(priv_key_hex).unwrap();
         let mut op_signer = BitcoinOpSigner::new(secp_k);

@@ -30,7 +30,7 @@ use stacks_common::util::sleep_ms;
 use crate::bitcoin::Txid;
 use crate::bitcoin::blocks::TransactionExtensions;
 use crate::bitcoin::wallet::BitcoinClient;
-use crate::tests::*;
+use crate::devnet::*;
 use crate::bitcoin::ops::*;
 use crate::bitcoin::wallet::tests::utils;
 
@@ -65,7 +65,7 @@ fn test_send_pegin_tx_and_joint_spend() {
 
     let mut btcd_controller = BitcoinCoreController::from_config(&config);
     btcd_controller
-        .start_bitcoind()
+        .start()
         .expect("bitcoind should be started!");
 
     let user_btc_controller = BitcoinClient::new(config.clone());
@@ -188,7 +188,7 @@ fn test_send_pegin_tx_and_clawback() {
 
     let mut btcd_controller = BitcoinCoreController::from_config(&config);
     btcd_controller
-        .start_bitcoind()
+        .start()
         .expect("bitcoind should be started!");
 
     let user_btc_controller = BitcoinClient::new(config.clone());
@@ -349,7 +349,7 @@ fn test_send_pegin_and_transfer() {
 
     let mut btcd_controller = BitcoinCoreController::from_config(&config);
     btcd_controller
-        .start_bitcoind()
+        .start()
         .expect("bitcoind should be started!");
 
     let user_btc_controller = BitcoinClient::new(config.clone());

@@ -1,4 +1,5 @@
-// Copyright (C) 2026 Stacks Open Internet Foundation
+// Copyright (
+// C) 2026 Stacks Open Internet Foundation
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,10 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::util::execute_in_segwit_contract;
+use crate::contracts::execute_in_segwit_contract;
+
+mod pegin; 
 
 #[test]
 fn test_segwit_hello_world() {
     let value = execute_in_segwit_contract("u1").unwrap();
-    assert_eq!(value.unwrap().expect_u128(), 1u128);
+    assert_eq!(value.unwrap().expect_u128().unwrap(), 1u128);
 }
+

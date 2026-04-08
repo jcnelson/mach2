@@ -15,7 +15,6 @@
 
 use clarity_types::types::QualifiedContractIdentifier;
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
-use stacks_common::types::chainstate::StacksAddress;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fs;
@@ -32,7 +31,6 @@ pub const DEFAULT_SATS_PER_VB: u64 = 50;
 pub enum PrivateKeyType {
     User,
     Cosigner,
-    Spender
 }
 
 impl PrivateKeyType {
@@ -40,7 +38,6 @@ impl PrivateKeyType {
         match self {
             Self::User => "user".into(),
             Self::Cosigner => "cosigner".into(),
-            Self::Spender => "spender".into()
         }
     }
 }
@@ -51,7 +48,6 @@ impl TryFrom<&str> for PrivateKeyType {
         match s {
             "user" => Ok(Self::User),
             "cosigner" => Ok(Self::Cosigner),
-            "spender" => Ok(Self::Spender),
             _ => Err(())
         }
     }
@@ -76,13 +72,6 @@ impl ConfigPrivateKey {
     pub fn new_cosigner(key: Secp256k1PrivateKey) -> Self {
         Self {
             key_type: PrivateKeyType::Cosigner,
-            key
-        }
-    }
-
-    pub fn new_spender(key: Secp256k1PrivateKey) -> Self {
-        Self {
-            key_type: PrivateKeyType::Spender,
             key
         }
     }
@@ -123,33 +112,33 @@ pub struct ConfigBitcoin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// mainnet or testnet
-    mainnet: bool,
+    pub mainnet: bool,
     /// stacks node host
-    node_host: String,
-    /// stacks node port
-    node_port: u16,
+    pub node_host: String,
+    /// stacks node p2p port
+    pub node_p2p_port: u16,
+    /// stacks node RPC port
+    pub node_port: u16,
     /// identity key for storing data in stackerdb
     storage_private_key: Secp256k1PrivateKey,
     /// location where we store local DBs
     /// (relative or absolute)
-    storage: String,
+    pub storage: String,
     /// our stackerdb contract address
-    storage_addr: QualifiedContractIdentifier,
+    pub storage_addr: QualifiedContractIdentifier,
     /// Path to mocked stackerdb databases
     mock_stackerdb_paths: HashMap<QualifiedContractIdentifier, String>,
     /// Cosigner private key(s)
     cosigner_private_keys: Vec<Secp256k1PrivateKey>,
     /// User private key
     user_private_key: Secp256k1PrivateKey,
-    /// Spender private key
-    spender_private_key: Option<Secp256k1PrivateKey>,
 
     /// bitcoin config (visible to tests)
     #[cfg(test)]
     pub bitcoin: ConfigBitcoin,
     #[cfg(not(test))]
     bitcoin: ConfigBitcoin,
-    
+
     /// Path from which we loaded this (visible to tests)
     #[cfg(test)]
     pub __path: String,
@@ -211,7 +200,9 @@ pub struct ConfigFile {
     mainnet: bool,
     /// node host
     node_host: String,
-    /// node port
+    /// stacks node p2p port
+    node_p2p_port: u16,
+    /// node RPC port
     node_port: u16,
     /// identity key for stackerdb
     storage_private_key: String,
@@ -303,7 +294,6 @@ impl TryFrom<ConfigFile> for Config {
         }
 
         let mut user_private_key = None;
-        let mut spender_private_key = None;
         let mut cosigner_private_keys = vec![];
         for privk in config_file.private_keys.into_iter() {
             let key_info = ConfigPrivateKey::try_from(privk)?;
@@ -313,12 +303,6 @@ impl TryFrom<ConfigFile> for Config {
                         return Err("More than one user private key".into());
                     }
                     user_private_key.replace(key_info.key);
-                }
-                PrivateKeyType::Spender => {
-                    if spender_private_key.is_some() {
-                        return Err("More than one spender private key".into());
-                    }
-                    spender_private_key.replace(key_info.key);
                 }
                 PrivateKeyType::Cosigner => {
                     cosigner_private_keys.push(key_info.key);
@@ -333,6 +317,7 @@ impl TryFrom<ConfigFile> for Config {
         Ok(Config {
             mainnet: config_file.mainnet,
             node_host: config_file.node_host,
+            node_p2p_port: config_file.node_p2p_port,
             node_port: config_file.node_port,
             storage_private_key: Secp256k1PrivateKey::from_hex(&config_file.storage_private_key)
                 .map_err(|e| format!("Failed to parse `private_key`: {:?}", &e))?,
@@ -340,7 +325,6 @@ impl TryFrom<ConfigFile> for Config {
             storage_addr: default_storage,
             mock_stackerdb_paths,
             user_private_key,
-            spender_private_key,
             cosigner_private_keys,
             bitcoin: config_file.bitcoin.map(|btc_cfg| btc_cfg.try_into()).unwrap_or(Ok(ConfigBitcoin::default()))?,
             __path: "".into(),
@@ -382,9 +366,6 @@ impl From<Config> for ConfigFile {
     fn from(config: Config) -> Self {
         let mut private_keys = vec![];
         private_keys.push(ConfigPrivateKey::new_user(config.user_private_key).into());
-        if let Some(spender_key) = config.spender_private_key {
-            private_keys.push(ConfigPrivateKey::new_spender(spender_key).into());
-        }
         private_keys.extend(config
             .cosigner_private_keys
             .into_iter()
@@ -393,6 +374,7 @@ impl From<Config> for ConfigFile {
         Self {
             mainnet: config.mainnet,
             node_host: config.node_host.clone(),
+            node_p2p_port: config.node_p2p_port,
             node_port: config.node_port,
             storage_private_key: config.storage_private_key.to_hex(),
             storage: Some(config.storage),
@@ -420,8 +402,8 @@ impl ConfigBitcoin {
             peer_host: "localhost".to_string(),
             peer_port: 8333,
             rpc_port: 8332,
-            username: None,
-            password: None,
+            username: Some("mach2".to_string()),
+            password: Some("mach2".to_string()),
             timeout: 30,
             satoshis_per_byte: DEFAULT_SATS_PER_VB, 
             rbf_fee_increment: 0,
@@ -440,6 +422,7 @@ impl Config {
         Config {
             mainnet: true,
             node_host: "localhost".into(),
+            node_p2p_port: 20444,
             node_port: 20443,
             storage_private_key: Secp256k1PrivateKey::random(),
             storage: "./db".into(),
@@ -451,16 +434,23 @@ impl Config {
             mock_stackerdb_paths: HashMap::new(),
             bitcoin: ConfigBitcoin::default(),
             user_private_key: Secp256k1PrivateKey::random(),
-            spender_private_key: None,
             cosigner_private_keys: vec![],
             __path: "".into(),
         }
     }
     
     pub fn new(mainnet: bool, node_host: String, node_port: u16) -> Config {
+        let mut btc_config = ConfigBitcoin::default();
+        if !mainnet {
+            btc_config.network_id = BitcoinNetworkType::Regtest;
+            btc_config.peer_port = 18333;
+            btc_config.rpc_port = 18332;
+        }
+
         Config {
             mainnet,
             node_host,
+            node_p2p_port: node_port + 1,
             node_port,
             storage_private_key: Secp256k1PrivateKey::random(),
             storage: "./db".into(),
@@ -470,9 +460,8 @@ impl Config {
                 )
                 .unwrap(),
             mock_stackerdb_paths: HashMap::new(),
-            bitcoin: ConfigBitcoin::default(),
+            bitcoin: btc_config,
             user_private_key: Secp256k1PrivateKey::random(),
-            spender_private_key: None,
             cosigner_private_keys: vec![],
             __path: "".into(),
         }
@@ -511,6 +500,7 @@ impl Config {
         self.mainnet
     }
 
+    /// Get node RPC address
     pub fn get_node_addr(&self) -> (String, u16) {
         (self.node_host.clone(), self.node_port)
     }
@@ -536,10 +526,6 @@ impl Config {
 
     pub fn user_private_key(&self) -> &Secp256k1PrivateKey {
         &self.user_private_key
-    }
-    
-    pub fn spender_private_key(&self) -> Option<&Secp256k1PrivateKey> {
-        self.spender_private_key.as_ref()
     }
     
     pub fn cosigner_private_keys(&self) -> &[Secp256k1PrivateKey] {
