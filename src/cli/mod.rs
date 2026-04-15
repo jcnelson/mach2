@@ -30,6 +30,7 @@ pub use crate::cli::crypto::handle_crypto_command;
 pub use crate::cli::pegin::handle_pegin_command;
 pub use crate::cli::stackerdb::handle_stackerdb_command;
 
+#[derive(Debug)]
 pub enum Error {
     Failed(String, i32)
 }

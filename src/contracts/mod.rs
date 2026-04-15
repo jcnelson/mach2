@@ -25,32 +25,34 @@ mod tests;
 pub const BITCOIN_CONTRACT : &'static str = include_str!("./bitcoin.clar");
 pub const SEGWIT_CONTRACT : &'static str = include_str!("./segwit.clar");
 pub const WITNESS_SCRIPT_CONTRACT : &'static str = include_str!("./witness.clar");
+pub const OUTCOMES_CONTRACT : &'static str = include_str!("./outcomes.clar");
 pub const MAIN_CONTRACT : &'static str = include_str!("./mach2.clar");
 
-pub const DEFAULT_CLARITY_VERSION : ClarityVersion = ClarityVersion::Clarity4;
+pub const DEFAULT_CLARITY_VERSION : ClarityVersion = ClarityVersion::Clarity5;
 
-pub fn execute_in_bitcoin_contract(code: &str) -> Result<Option<Value>, VmError> {
+pub fn execute_in_bitcoin_contract(mainnet: bool, code: &str) -> Result<Option<Value>, VmError> {
     let full_program = format!("{}\n{}", BITCOIN_CONTRACT, code);
-    vm_execute(&full_program, DEFAULT_CLARITY_VERSION)
+    vm_execute(mainnet, &full_program, DEFAULT_CLARITY_VERSION)
 }
 
-pub fn execute_in_segwit_contract(code: &str) -> Result<Option<Value>, VmError> {
+pub fn execute_in_segwit_contract(mainnet: bool, code: &str) -> Result<Option<Value>, VmError> {
     let full_program = format!("{}\n{}", SEGWIT_CONTRACT, code);
-    vm_execute(&full_program, DEFAULT_CLARITY_VERSION)
+    vm_execute(mainnet, &full_program, DEFAULT_CLARITY_VERSION)
 }
 
-pub fn execute_in_witness_contract(code: &str) -> Result<Option<Value>, VmError> {
+pub fn execute_in_witness_contract(mainnet: bool, code: &str) -> Result<Option<Value>, VmError> {
     let full_program = format!("{}\n{}", WITNESS_SCRIPT_CONTRACT, code);
-    vm_execute(&full_program, DEFAULT_CLARITY_VERSION)
+    vm_execute(mainnet, &full_program, DEFAULT_CLARITY_VERSION)
 }
 
-pub fn execute_in_scbtc_contract(code: &str) -> Result<Option<Value>, VmError> {
+pub fn execute_in_scbtc_contract(mainnet: bool, code: &str) -> Result<Option<Value>, VmError> {
     let full_program = format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         SEGWIT_CONTRACT,
         WITNESS_SCRIPT_CONTRACT,
+        OUTCOMES_CONTRACT,
         MAIN_CONTRACT,
         code
     );
-    vm_execute(&full_program, DEFAULT_CLARITY_VERSION)
+    vm_execute(mainnet, &full_program, DEFAULT_CLARITY_VERSION)
 }

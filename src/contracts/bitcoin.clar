@@ -371,7 +371,7 @@
          nonce: (get uint32 parsed-nonce)})))
 
 ;; MOCK section
-(define-constant DEBUG-MODE true)
+(define-constant DEBUG-MODE (not is-in-mainnet))
 
 (define-map mock-burnchain-header-hashes uint (buff 32))
 
@@ -426,14 +426,6 @@
      (h2 (if is-left cur-hash (unwrap-panic (element-at proof-hashes ctr))))
      (next-hash (sha256 (sha256 (concat h1 h2))))
      (is-verified (and (is-eq (+ u1 ctr) (len proof-hashes)) (is-eq next-hash root-hash))))
-  (print "h1")
-  (print h1)
-  (print "h2")
-  (print h2)
-  (print "cur-hash")
-  (print cur-hash)
-  (print "next-hash")
-  (print next-hash)
   (merge state { cur-hash: next-hash, verified: is-verified})))
 
 ;; Verify a Merkle proof, given the _reversed_ txid of a transaction, the merkle root of its block, and a proof consisting of:
@@ -509,13 +501,12 @@
 ;; Use was-tx-mined-compact with header as a buffer or
 ;; was-tx-mined with header as a tuple.
 ;; Returns txid if tx was mined else err u1 if the header is invalid or err u2 if the proof is invalid.
-(define-private (was-tx-mined-internal
+(define-read-only (was-tx-mined-internal
     (height uint)
     (tx (buff 4096))
     (header (buff 80))
     (merkle-root (buff 32))
-    (proof { tx-index: uint, hashes: (list 14 (buff 32)),
-    tree-depth: uint}))
+    (proof { tx-index: uint, hashes: (list 14 (buff 32)), tree-depth: uint}))
 
     (if (verify-block-header header height)
         (let ((reversed-txid (get-reversed-txid tx))

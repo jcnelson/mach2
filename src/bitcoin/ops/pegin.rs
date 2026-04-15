@@ -40,20 +40,22 @@ use crate::bitcoin::ops::TransactionExtensions;
 use crate::bitcoin::ops::Error;
 
 pub struct OpPegIn {
-    locktime: u32,
-    safety_margin: u32,
-    user_pubkey: Secp256k1PublicKey,
+    pub(crate) locktime: u32,
+    pub(crate) safety_margin: u32,
+    pub(crate) user_pubkey: Secp256k1PublicKey,
     user_signature_witness: Vec<u8>,    // one user signature for now
     cosigner_pubkeys: Vec<Secp256k1PublicKey>,
     cosigner_signature_witness: Vec<Vec<u8>>,
-    provider: StacksAddress,
-    amount: u64,
-    signature_hashes: HashMap<usize, Sha256dHash>
+    pub(crate) provider: StacksAddress,
+    pub(crate) amount: u64,
+    signature_hashes: HashMap<usize, Sha256dHash>,
+    mainnet: bool
 }
 
 impl OpPegIn {
-    pub fn new(locktime: u32, safety_margin: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], provider: StacksAddress, amount: u64) -> Self {
+    pub fn new(mainnet: bool, locktime: u32, safety_margin: u32, user_pubkey: &Secp256k1PublicKey, cosigner_pubkeys: &[Secp256k1PublicKey], provider: StacksAddress, amount: u64) -> Self {
         Self {
+            mainnet,
             locktime,
             safety_margin,
             user_pubkey: user_pubkey.clone(),
@@ -94,7 +96,7 @@ impl OpPegIn {
         }}"#);
 
         let cosigner_program = format!("(make-cosigner-multisig-script {cosigner_keys_list})");
-        let cosigner_dag_script_value = execute_in_witness_contract(&cosigner_program)
+        let cosigner_dag_script_value = execute_in_witness_contract(self.mainnet, &cosigner_program)
             .map_err(|e| Error::EvalFailed(format!("Failed to run Clarity program '{cosigner_program}': {e:?}")))?
             .ok_or_else(|| Error::EvalFailed(format!("Clarity program did not complete: '{cosigner_program}'")))?;
                 
@@ -105,7 +107,7 @@ impl OpPegIn {
         let cosigner_dag_buff_hex = to_hex(&cosigner_dag_buff);
 
         let witness_script_program = format!("(make-pegin-witness-script 0x{cosigner_dag_buff_hex} {witness_tuple})");
-        let witness_script_value = execute_in_witness_contract(&witness_script_program)
+        let witness_script_value = execute_in_witness_contract(self.mainnet, &witness_script_program)
             .map_err(|e| Error::EvalFailed(format!("Failed to run Clarity program {witness_script_program}: {e:?}")))?
             .ok_or_else(|| Error::EvalFailed(format!("Clarity program did not complete: {witness_script_program}")))?;
 
@@ -141,7 +143,7 @@ impl OpPegIn {
         let witness = format!("(list {})", witness_list.join(" "));
         let cosigner_dag_keys = format!("(list {})", &cosigner_dag_keys_list.join(" "));
         let program = format!("(check-signatures {witness} {sighash} {user_pubkey} {cosigner_dag_keys})");
-        let result_value = execute_in_scbtc_contract(&program)
+        let result_value = execute_in_scbtc_contract(self.mainnet, &program)
             .map_err(|e| Error::EvalFailed(format!("Failed to run Clarity program '{program}': {e:?}")))?
             .ok_or_else(|| Error::EvalFailed(format!("Clarity program did not complete: '{program}'")))?;
         
@@ -427,7 +429,7 @@ impl OpPegIn {
             let sig_hash_all = 0x01;
             let sig_hash_res = if !is_cosigner && utxo.script_pub_key == user_p2wpkh && self.is_user_signer(signer) {
                 // spending on-chain p2pwkh UTXO from user
-                tx.make_segwit_signature_hash(i, &user_p2wpkh, utxo.amount)
+                tx.make_segwit_signature_hash(self.mainnet, i, &user_p2wpkh, utxo.amount)
             }
             else if utxo.script_pub_key == pegin_p2wsh && (is_cosigner || self.is_user_signer(signer)) {
                 // spending a prior pegin witness script
@@ -435,7 +437,7 @@ impl OpPegIn {
                     m2_warn!("Cannot spend a pegin UTXO without a positive locktime");
                     return Err(Error::BadLocktime);
                 }
-                tx.make_segwit_signature_hash(i, &witness_script, utxo.amount)
+                tx.make_segwit_signature_hash(self.mainnet, i, &witness_script, utxo.amount)
             }
             else {
                 continue;
@@ -573,7 +575,7 @@ impl OpPegIn {
             if out.script_pubkey == pegin {
                 ret.push(UTXO {
                     txid: DoubleSha256(tx.txid().0),
-                    vout: i as u32,
+                    vout: u32::try_from(i).expect("infallible -- transactions do not have more than u32::MAX outputs"),
                     script_pub_key: pegin.clone(),
                     amount: out.value,
                     confirmations

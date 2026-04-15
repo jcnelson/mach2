@@ -174,12 +174,42 @@ impl BitcoinSegwitMerkleProof {
                 {coinbase_tx}
                 {coinbase_proof_list})");
 
-        let Ok(Some(result)) = execute_in_bitcoin_contract(&invocation)
+        let Ok(Some(result)) = execute_in_bitcoin_contract(false, &invocation)
             .inspect_err(|e| m2_warn!("Failed to check Merkle proof: {e:?}"))
         else {
             return false;
         };
         result.expect_result_ok().is_ok()
+    }
+
+    /// Compute a Segwit Merkle proof for a given txid in a block at a given height.
+    /// The given txid should be big-endian (i.e. what you see on a block explorer)
+    pub fn from_block(reversed_txid: &Txid, block: &BitcoinBlock, block_height: u32) -> Result<Self, Error> {
+        let txid = {
+            // code uses 256-bit integers, which are reversed from what explorers and bitcoin-cli show
+            let mut bytes = reversed_txid.0.clone();
+            bytes.reverse();
+            Txid(bytes)
+        };
+        let wtxids : Vec<_> = block.txdata.iter().map(|tx| Txid(tx.wtxid().0)).collect();
+        let txids : Vec<_> = block.txdata.iter().map(|tx| Txid(tx.txid().0)).collect();
+        let tx_index = if let Some(tx_index) = wtxids.iter().position(|id| id == &txid) {
+            tx_index
+        }
+        else if let Some(tx_index) = txids.iter().position(|id| id == &txid) {
+            tx_index
+        }
+        else {
+            return Err(Error::Failed(format!("Txid {reversed_txid} not found in block"), 1));
+        };
+
+        let proof = BitcoinSegwitMerkleProof::new(&block, block_height, tx_index)
+            .ok_or_else(|| Error::Failed(format!("Unable to build Merkle proof for {reversed_txid}"), 2))?;
+
+        if !proof.check() {
+            return Err(Error::Failed(format!("Failed to check that {reversed_txid} belongs to the block"), 2))?;
+        }
+        Ok(proof)
     }
 }
 
@@ -208,12 +238,6 @@ pub fn handle_bitcoin_command(cmd: &str, argv: &mut Vec<String>) -> Result<Strin
         }
         let reversed_txid = Txid::from_hex(&argv[0])
             .map_err(|e| Error::Failed(format!("Failed to decode txid: {e:?}"), 1))?;
-        let txid = {
-            // code uses 256-bit integers, which are reversed from what explorers and bitcoin-cli show
-            let mut bytes = reversed_txid.0.clone();
-            bytes.reverse();
-            Txid(bytes)
-        };
         let block_path = &argv[1];
         let block_height : u32 = argv[2].parse()
             .map_err(|_e| Error::Failed(format!("Unable to parse '{}' as a block height", &argv[2]), 1))?;
@@ -224,29 +248,10 @@ pub fn handle_bitcoin_command(cmd: &str, argv: &mut Vec<String>) -> Result<Strin
         else {
             load_from_file_or_stdin(block_path)?
         };
-
         let decoded_block : BitcoinBlock = BtcDeserialize(&block_bytes) 
             .map_err(|e| Error::Failed(format!("Failed to decode Bitcoin block: {e:?}"), 2))?;
 
-        let wtxids : Vec<_> = decoded_block.txdata.iter().map(|tx| Txid(tx.wtxid().0)).collect();
-        let txids : Vec<_> = decoded_block.txdata.iter().map(|tx| Txid(tx.txid().0)).collect();
-        let tx_index = if let Some(tx_index) = wtxids.iter().position(|id| id == &txid) {
-            tx_index
-        }
-        else if let Some(tx_index) = txids.iter().position(|id| id == &txid) {
-            tx_index
-        }
-        else {
-            return Err(Error::Failed(format!("Txid {reversed_txid} not found in block"), 1));
-        };
-
-        let proof = BitcoinSegwitMerkleProof::new(&decoded_block, block_height, tx_index)
-            .ok_or_else(|| Error::Failed(format!("Unable to build Merkle proof for {reversed_txid}"), 2))?;
-
-        if !proof.check() {
-            return Err(Error::Failed(format!("Failed to check that {reversed_txid} belongs to the block"), 2))?;
-        }
-
+        let proof = BitcoinSegwitMerkleProof::from_block(&reversed_txid, &decoded_block, block_height)?;
         return Ok(serde_json::to_string(&proof).map_err(|e| Error::Failed(format!("Failed to serialize proof to JSON: {e:?}"), 2))?);
     }
 

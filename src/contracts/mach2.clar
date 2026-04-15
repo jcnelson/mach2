@@ -40,6 +40,8 @@
 (define-constant ERR_NO_SUCH_TX u34)
 (define-constant ERR_MULTIPLE_PROVIDERS u35)
 
+(define-constant BTC_ERROR_BASE u1000)
+
 (define-constant SINGLESIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x16 0x1a))
 (define-constant MULTISIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x14 0x15))
 
@@ -202,13 +204,12 @@
     cosigner-addr))    
 
 
-;; Top-level function to register a cosigner.
+;; Register a cosigner
 ;; All keys in `dag-keys` must be heretofor unused.
-;; This can only be called via a top-level contract-call.
-;; The caller will be the cosigner principal.
-(define-public (register-cosigner (dag-keys (list 10 (buff 33))))
+(define-private (inner-register-cosigner
+    (cosigner-addr principal)
+    (dag-keys (list 10 (buff 33))))
     (let (
-        (cosigner-addr (try! (get-toplevel-addr)))
         (dag-keys-unused (try! (if (fold check-cosigner-keys-used dag-keys true) (ok true) (err ERR_COSIGNER_KEY_ALREADY_USED))))
         (cosigner-dag-script (make-cosigner-multisig-script dag-keys))
     )
@@ -225,11 +226,22 @@
     (ok true)))
 
 
+;; Top-level function to register a cosigner.
+;; All keys in `dag-keys` must be heretofor unused.
+;; This can only be called via a top-level contract-call.
+;; The caller will be the cosigner principal.
+(define-public (register-cosigner (dag-keys (list 10 (buff 33))))
+    (let (
+        (cosigner-addr (try! (get-toplevel-addr)))
+    )
+    (inner-register-cosigner cosigner-addr dag-keys)))
+
+
 (define-read-only (balance-adder
     (balance-item { provider: principal, amount: uint, expires: uint })
     (ctx { btc-block-height: uint, sum: uint }))
 
-    (if (< (get expires balance-item) (get btc-block-height ctx))
+    (if (>= (get expires balance-item) (get btc-block-height ctx))
         (merge ctx { sum: (+ (get amount balance-item) (get sum ctx)) })
         ctx))
 
@@ -813,7 +825,6 @@
 
 
 ;; Decode a Bitcoin tx and its witness data.
-;; If there is a decode error, then store the decode error to `last-btc-decode-error`
 (define-read-only (decode-bitcoin-wtx (wtx (buff 4096)))
     (match (contract-call? .bitcoin parse-wtx wtx true)
         decoded-tx
@@ -838,7 +849,8 @@
                 signature-hash: (try! (precompute-segwit-signature-hash
                     (get version decoded-tx)
                     ins
-                    (get outs decoded-tx)))
+                    (get outs decoded-tx)
+                    (get locktime decoded-tx)))
             }))
         err-decode (err ERR_TX_DECODE_ERROR)))
 
@@ -916,7 +928,7 @@
 
     (let (
         ;; the tx must be mined on this fork
-        (wtxid-be (try! (contract-call? .bitcoin was-segwit-tx-mined-compact
+        (wtxid-be (try! (match (contract-call? .bitcoin was-segwit-tx-mined-compact
                 btc-height
                 wtx
                 btc-header
@@ -926,7 +938,9 @@
                 witness-merkle-root
                 witness-reserved-value
                 btc-coinbase-tx
-                btc-coinbase-proof)))
+                btc-coinbase-proof)
+            wtxid-be (ok wtxid-be)
+            err-btc (err (+ BTC_ERROR_BASE err-btc)))))
     )
     (parse-and-store-wtx wtx)))
 
@@ -967,8 +981,8 @@
 
     (let (
         (user-balances (get fresh (fold retain-fresh-balances (default-to (list ) (map-get? balances owner)) { fresh: (list ), cur-btc-height: cur-btc-height })))
-        (have-space (try! (if (< (len user-balances) u1024) (ok true) (err ERR_TOO_MANY_PROVIDERS))))
         (provider-index-opt (get found (fold find-provider-balance-index user-balances { i: u0, found: none, provider: provider })))
+        (have-space (try! (if (and (is-none provider-index-opt) (< (len user-balances) u1024)) (ok true) (err ERR_TOO_MANY_PROVIDERS))))
         (cur-provider-balance (match provider-index-opt
             provider-index
                 ;; SAFETY: (some ..) implies that a match was found
@@ -981,7 +995,10 @@
         }))
     
         ;; SAFETY: checked with have-space
-        (new-balances (unwrap-panic (as-max-len? (append user-balances new-provider-balance) u1024)))
+        (new-balances (match provider-index-opt
+            provider-index
+                (unwrap-panic (replace-at? user-balances provider-index new-provider-balance))
+            (unwrap-panic (as-max-len? (append user-balances new-provider-balance) u1024))))
     )
 
     (ok new-balances)))
@@ -1042,7 +1059,7 @@
     )
 
     ;; UTXO scriptPubKey must match witness script
-    (asserts! (is-eq (get scriptPubKey pegin-out) (concat 0x00 pegin-witness-script-hash))
+    (asserts! (is-eq (get scriptPubKey pegin-out) (concat 0x0020 pegin-witness-script-hash))
         (err ERR_TX_INVALID_PEGIN_P2WSH))
 
     ;; create the peg-in UTXO, if it doesn't exist already
@@ -1076,6 +1093,7 @@
 ;; Returns (err ..) on failure
 (define-public (register-pegin-utxo
     (wtxid (buff 32))
+    (mined-btc-height uint)
     (pegin-output uint)
     (witness-data {
         recipient-principal: principal,
@@ -1089,8 +1107,55 @@
     )
 
     ;; (note that this will fail if `cosigner-addr` isn't registered)
-    (inner-register-pegin-utxo cosigner-addr burn-block-height wtxid pegin-output witness-data)))
+    (inner-register-pegin-utxo cosigner-addr mined-btc-height wtxid pegin-output witness-data)))
 
+
+;; Register a peg-in transaction and register a UTXO within it.
+;; 
+;; Returns (ok (buff 32)) with the little-endian wtxid on success
+;; Returns (err ..) on failure
+(define-private (inner-register-pegin
+    (cosigner-addr principal)
+    ;; the transaction
+    (wtx (buff 4096))
+    ;; proof info
+    (btc-header (buff 80))
+    (btc-height uint)
+    (btc-tx-index uint)
+    (tree-depth uint)
+    (wproof (list 14 (buff 32)))
+    (witness-merkle-root (buff 32))
+    (witness-reserved-value (buff 32))
+    (btc-coinbase-tx (buff 4096))
+    (btc-coinbase-proof (list 14 (buff 32)))
+    ;; the UTXO
+    (pegin-output uint)
+    (witness-data {
+        recipient-principal: principal,
+        user-pubkey: (buff 33),
+        locktime: uint,
+        safety-margin: uint
+    }))
+
+    (let (
+        ;; decode and store the tx
+        (wtxid (try! (inner-auth-and-store-pegin-tx
+            btc-height
+            wtx 
+            btc-header
+            btc-tx-index
+            tree-depth
+            wproof
+            witness-merkle-root
+            witness-reserved-value
+            btc-coinbase-tx
+            btc-coinbase-proof
+        )))
+    )
+    ;; try and register the UTXO
+    ;; (note that this will fail if `cosigner-addr` isn't registered)
+    (inner-register-pegin-utxo cosigner-addr btc-height wtxid pegin-output witness-data)))
+     
 
 ;; Register a peg-in transaction and register a UTXO within it.
 ;; Only the cosigner can call this, since the cosigner takes responsibility for this.
@@ -1102,6 +1167,7 @@
     (wtx (buff 4096))
     ;; proof info
     (btc-header (buff 80))
+    (btc-block-height uint)
     (btc-tx-index uint)
     (tree-depth uint)
     (wproof (list 14 (buff 32)))
@@ -1121,23 +1187,18 @@
     (let (
         ;; this must be called top-level by a cosigner
         (cosigner-addr (try! (get-toplevel-addr)))
-
-        ;; decode and store the tx
-        (wtxid (try! (inner-auth-and-store-pegin-tx
-            burn-block-height
-            wtx 
-            btc-header
-            btc-tx-index
-            tree-depth
-            wproof
-            witness-merkle-root
-            witness-reserved-value
-            btc-coinbase-tx
-            btc-coinbase-proof
-        )))
     )
-
-    ;; try and register the UTXO
-    ;; (note that this will fail if `cosigner-addr` isn't registered)
-    (inner-register-pegin-utxo cosigner-addr burn-block-height wtxid pegin-output witness-data)))
-
+    (inner-register-pegin
+        cosigner-addr
+        wtx
+        btc-header
+        btc-block-height
+        btc-tx-index
+        tree-depth
+        wproof
+        witness-merkle-root
+        witness-reserved-value
+        btc-coinbase-tx
+        btc-coinbase-proof
+        pegin-output
+        witness-data)))

@@ -411,7 +411,7 @@ mod tests {
 (was-segwit-tx-mined-compact u123 {tx_str} {block_header} u{i} u{tree_depth} {proof_list} {witness_root} {witness_reserved} {coinbase_tx} {coinbase_proof_list})");
 
             eprintln!("{invocation}");
-            let result = execute_in_bitcoin_contract(&invocation).unwrap();
+            let result = execute_in_bitcoin_contract(false, &invocation).unwrap();
             assert!(result.is_some());
             eprintln!("{result:?}");
 

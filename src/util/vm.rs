@@ -31,10 +31,10 @@ use clarity::vm::errors::VmExecutionError;
 use clarity_types::errors::ParseError;
 
 use stacks_common::types::StacksEpochId;
-use stacks_common::consts::CHAIN_ID_MAINNET;
+use stacks_common::consts::CHAIN_ID_TESTNET;
 
-pub const DEFAULT_EPOCH: StacksEpochId = StacksEpochId::Epoch33;
-pub const DEFAULT_CHAIN_ID: u32 = CHAIN_ID_MAINNET;
+pub const DEFAULT_EPOCH: StacksEpochId = StacksEpochId::Epoch34;
+pub const DEFAULT_CHAIN_ID: u32 = CHAIN_ID_TESTNET;
 
 #[derive(Debug)]
 pub enum Error {
@@ -74,13 +74,13 @@ impl From<ParseError> for Error {
 }
 
 /// Execute program in a transient environment.
-pub fn vm_execute(program: &str, clarity_version: ClarityVersion) -> Result<Option<Value>, Error> {
+pub fn vm_execute(mainnet: bool, program: &str, clarity_version: ClarityVersion) -> Result<Option<Value>, Error> {
     let contract_id = QualifiedContractIdentifier::transient();
     let mut contract_context = ContractContext::new(contract_id.clone(), clarity_version);
     let mut marf = MemoryBackingStore::new();
     let conn = marf.as_clarity_db();
     let mut global_context = GlobalContext::new(
-        true,
+        mainnet,
         DEFAULT_CHAIN_ID,
         conn,
         LimitedCostTracker::new_free(),

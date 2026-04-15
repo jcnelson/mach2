@@ -27,6 +27,7 @@ use crate::bitcoin::address::{
 use crate::bitcoin::{BitcoinNetworkType, Error};
 use crate::bitcoin::Txid;
 use stacks_common::codec::StacksMessageCodec;
+use stacks_common::deps_common::bitcoin::blockdata::block::Block as BitcoinBlock;
 use stacks_common::deps_common::bitcoin::blockdata::opcodes;
 use stacks_common::deps_common::bitcoin::blockdata::script::{Builder, Script};
 use stacks_common::deps_common::bitcoin::blockdata::transaction::{
@@ -45,7 +46,7 @@ use crate::core::config::Config;
 
 use crate::bitcoin::rpc::{
     BitcoinRpcClient, BitcoinRpcClientError, BitcoinRpcClientResult, ImportDescriptorsRequest,
-    Timestamp,
+    Timestamp, GetTransactionResponse, GetBlockChainInfoResponse, GetBlockStatsResponse
 };
 
 use serde::{Serialize, Deserialize};
@@ -588,8 +589,24 @@ impl BitcoinClient {
         Ok(UTXOSet { utxos })
     }
 
+    pub fn get_transaction(&self, txid: &Txid) -> BitcoinRpcClientResult<GetTransactionResponse> {
+        self.get_rpc_client().get_transaction(&self.get_wallet_name(), txid)
+    }
+
+    pub fn get_block(&self, block_hash: &BurnchainHeaderHash) -> BitcoinRpcClientResult<BitcoinBlock> {
+        self.get_rpc_client().get_block(block_hash)
+    }
+
+    pub fn get_blockchain_info(&self) -> BitcoinRpcClientResult<GetBlockChainInfoResponse> {
+        self.get_rpc_client().get_blockchain_info()
+    }
+
     pub fn get_raw_transaction(&self, txid: &Txid) -> BitcoinRpcClientResult<Transaction> {
         self.get_rpc_client().get_raw_transaction(txid)
+    }
+
+    pub fn get_block_stats(&self, block_hash: &BurnchainHeaderHash) -> BitcoinRpcClientResult<GetBlockStatsResponse> {
+        self.get_rpc_client().get_block_stats(block_hash)
     }
 }
 

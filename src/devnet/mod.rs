@@ -14,6 +14,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 pub mod db;
+pub mod pegin;
 pub mod sip018;
 pub mod pox;
 pub mod tx;
@@ -27,16 +28,20 @@ use std::net::SocketAddr;
 
 use regex::Regex;
 
+use serde_json;
+
 use clarity::vm::types::PrincipalData;
 use clarity::vm::Value;
 use clarity_types::types::StacksAddressExtensions;
 
 use stacks_common::address::AddressHashMode;
 use stacks_common::consts::CHAIN_ID_MAINNET;
+use stacks_common::types::Address;
 use stacks_common::types::StacksEpochId;
 use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 use stacks_common::util::{get_epoch_time_secs, sleep_ms};
 use stacks_common::types::chainstate::StacksAddress;
+use stacks_common::util::hash::to_hex;
 
 use crate::bitcoin::Txid;
 use crate::bitcoin::rpc::BitcoinRpcClient;
@@ -1023,6 +1028,7 @@ impl DevnetController {
                 }
             })
             else {
+                m2_info!("At Bitcoin height {}, Stacks height {}, tenure height {}", chain_info.burn_block_height, chain_info.stacks_tip_height, chain_info.tenure_height);
                 return Ok(false);
             };
 
@@ -1119,3 +1125,29 @@ fn test_devnet_start_stop() {
 
     devnet.kill();
 }
+
+#[test]
+fn test_devnet_make_pegin_test_vector() {
+    if std::env::var("BITCOIND_TEST") != Ok("1".to_string()) {
+        return;
+    }
+
+    use crate::devnet::pegin::PeginTest;
+    
+    let config = DevnetController::default_config("test_devnet_make_pegin_test_vector");
+    let mut devnet = DevnetController::new(&config, "test_devnet_make_pegin_test_vector");
+    
+    let btc_key = Secp256k1PrivateKey::from_hex(&MINING_KEY).unwrap();
+    let btc_pub = Secp256k1PublicKey::from_private(&btc_key);
+    let _client = devnet.bootup(btc_pub).unwrap();
+
+    let mut pegin_test = PeginTest::new(btc_key, vec![0x02], 3, &devnet.config)
+        .begin(1000, 30, StacksAddress::from_string("ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD").unwrap(), 50 * 100_000_000, 40000);
+
+    m2_info!("cosigner_pubkeys: {:?}", &pegin_test.get_cosigner_pubkeys().into_iter().map(|pubk| pubk.to_hex()).collect::<Vec<_>>());
+    m2_info!("witness script: {}", to_hex(&pegin_test.pegin().make_witness_script().unwrap().into_bytes()));
+    m2_info!("decoded transaction: {:?}", &pegin_test.tx());
+    m2_info!("raw transaction: {}", &to_hex(&pegin_test.tx_bytes()));
+    m2_info!("proof-of-inclusion: {}", serde_json::to_string(pegin_test.proof.as_ref().unwrap()).unwrap());
+}
+

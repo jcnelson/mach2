@@ -164,11 +164,11 @@ pub trait TransactionExtensions {
         Ok((version_hash_prevouts_hash_sequence, hash_outputs_locktime_sighash))
     }
 
-    fn make_segwit_signature_hash(&self, i: usize, spender_script: &Script, amount: u64) -> Result<Sha256dHash, Error>;
+    fn make_segwit_signature_hash(&self, mainnet: bool, i: usize, spender_script: &Script, amount: u64) -> Result<Sha256dHash, Error>;
 }
 
 impl TransactionExtensions for Transaction {
-    fn make_segwit_signature_hash(&self, i: usize, spender_script: &Script, amount: u64) -> Result<Sha256dHash, Error> {
+    fn make_segwit_signature_hash(&self, mainnet: bool, i: usize, spender_script: &Script, amount: u64) -> Result<Sha256dHash, Error> {
         if !Self::is_tx_small_enough(self) {
             return Err(Error::TxTooBig);
         }
@@ -180,7 +180,7 @@ impl TransactionExtensions for Transaction {
 
         let precompute_code = format!(r#"(precompute-segwit-signature-hash u{version} {ins} {outs} u{locktime})"#);
 
-        let precomputed_hashes_value = execute_in_segwit_contract(&precompute_code)
+        let precomputed_hashes_value = execute_in_segwit_contract(mainnet, &precompute_code)
             .map_err(|e| Error::EvalFailed(format!("Failed to execute segwit sighash precompute code '{precompute_code}': {e:?}")))?
             .ok_or_else(|| Error::EvalFailed("Failed to compute the precomputed sighash values".to_string()))?;
 
@@ -200,7 +200,7 @@ impl TransactionExtensions for Transaction {
              0x{spend_script_hex}
              u{amount})"#);
         
-        let segwit_signature_hash_value = execute_in_segwit_contract(&segwit_sighash_code)
+        let segwit_signature_hash_value = execute_in_segwit_contract(mainnet, &segwit_sighash_code)
             .map_err(|e| Error::EvalFailed(format!("Failed to execute segwit sighash code '{segwit_sighash_code}': {e:?}")))?
             .ok_or_else(|| Error::EvalFailed(format!("Failed to get a return value for segwit sighash code '{segwit_sighash_code}'")))?;
 

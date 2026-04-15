@@ -79,7 +79,7 @@ fn test_send_pegin_tx_and_joint_spend() {
     let mut user_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
 
     // lock until height 110, with clawback at 120
-    let mut pegin = OpPegIn::new(110, 10, &user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(22, Hash160([0x01; 20])).unwrap(), 1000000000);
+    let mut pegin = OpPegIn::new(false, 110, 10, &user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(26, Hash160([0x01; 20])).unwrap(), 1000000000);
 
     let (mut pegin_tx, mut pegin_utxos) = pegin.make_unsigned_pegin_transaction(2000, &mut user_utxos).expect("Failed to create pegin transaction");
     eprintln!("unsigned pegin: {}", &pegin_tx.display());
@@ -202,7 +202,7 @@ fn test_send_pegin_tx_and_clawback() {
     let mut user_utxos = user_btc_controller.get_all_utxoset(&user_pubkey);
 
     // lock until height 120
-    let mut pegin = OpPegIn::new(110, 10, &user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(22, Hash160([0x12; 20])).unwrap(), 1000000000);
+    let mut pegin = OpPegIn::new(false, 110, 10, &user_pubkey, &[cosigner_pubkey_1.clone(), cosigner_pubkey_2.clone()], StacksAddress::new(26, Hash160([0x12; 20])).unwrap(), 1000000000);
 
     let (mut pegin_tx, mut pegin_utxos) = pegin.make_unsigned_pegin_transaction(2000, &mut user_utxos).expect("Failed to create pegin transaction");
     eprintln!("unsigned pegin: {}", &pegin_tx.display());

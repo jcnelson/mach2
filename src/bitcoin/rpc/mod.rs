@@ -33,6 +33,7 @@ use crate::core::config::Config;
 use stacks_common::types::chainstate::BurnchainHeaderHash;
 use stacks_common::types::Address;
 use stacks_common::util::hash::hex_bytes;
+use stacks_common::deps_common::bitcoin::blockdata::block::Block as BitcoinBlock;
 use stacks_common::deps_common::bitcoin::blockdata::script::Script;
 use stacks_common::deps_common::bitcoin::blockdata::transaction::Transaction;
 use stacks_common::deps_common::bitcoin::network::serialize::{
@@ -61,6 +62,22 @@ where
         other => Err(serde::de::Error::custom(format!(
             "invalid network type: {other}"
         ))),
+    }
+}
+
+/// Deserializes a JSON string into [`Option<BurnchainHeaderHash>`]
+pub(crate) fn deserialize_string_to_option_burn_header_hash<'de, D>(
+    deserializer: D,
+) -> Result<Option<BurnchainHeaderHash>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string_opt: Option<String> = Deserialize::deserialize(deserializer)?;
+    if let Some(string) = string_opt {
+        Ok(Some(BurnchainHeaderHash::from_hex(&string).map_err(serde::de::Error::custom)?))
+    }
+    else {
+        Ok(None)
     }
 }
 
@@ -108,6 +125,11 @@ pub struct GetBlockChainInfoResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GetTransactionResponse {
     pub confirmations: i32,
+    #[serde(
+        rename = "blockhash",
+        deserialize_with = "deserialize_string_to_option_burn_header_hash"
+    )]
+    pub block_hash: Option<BurnchainHeaderHash>
 }
 
 /// Response returned by the `getdescriptorinfo` RPC call.
@@ -383,6 +405,13 @@ impl<'de> Deserialize<'de> for BurnchainHeaderHashWrapperResponse {
     }
 }
 
+/// A `getblockstats` response
+#[derive(Debug, Clone, Deserialize)]
+pub struct GetBlockStatsResponse {
+    pub height: u64
+    // TODO: fill in other fields as needed
+}
+
 /// Client for interacting with a Bitcoin RPC service.
 #[derive(Debug, Clone)]
 pub struct BitcoinRpcClient {
@@ -641,11 +670,49 @@ impl BitcoinRpcClient {
         wallet: &str,
         txid: &Txid,
     ) -> BitcoinRpcClientResult<GetTransactionResponse> {
-        Ok(self.endpoint.send(
+        Ok(self.endpoint.send::<GetTransactionResponse>(
             &self.client_id,
             Some(&Self::wallet_path(wallet)),
             "gettransaction",
             vec![txid.to_hex().into()],
+        )?)
+    }
+
+    /// Retrieve a raw Bitcoin block
+    /// 
+    /// # Arguments
+    /// * `block_hash` - The block hash (as [`BurnchainHeaderHash`]) to query (in big-endian order).
+    /// # Returns
+    /// A [`BitcoinBlock`] containing the decoded block data
+    pub fn get_block(
+        &self,
+        block_hash: &BurnchainHeaderHash
+    ) -> BitcoinRpcClientResult<BitcoinBlock> {
+        let block_hex : String = self.endpoint.send(
+            &self.client_id,
+            None,
+            "getblock",
+            vec![block_hash.to_hex().into(), 0.into()]
+        )?;
+        let block = deserialize_hex(&block_hex)?;
+        Ok(block)
+    }
+    
+    /// Retrieve info about a Bitcoin block
+    /// 
+    /// # Arguments
+    /// * `block_hash` - The block hash (as [`BurnchainHeaderHash`]) to query (in big-endian order).
+    /// # Returns
+    /// A [`BitcoinBlock`] containing the decoded block data
+    pub fn get_block_stats(
+        &self,
+        block_hash: &BurnchainHeaderHash
+    ) -> BitcoinRpcClientResult<GetBlockStatsResponse> {
+        Ok(self.endpoint.send::<GetBlockStatsResponse>(
+            &self.client_id,
+            None,
+            "getblockstats",
+            vec![block_hash.to_hex().into()]
         )?)
     }
 
