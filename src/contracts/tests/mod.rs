@@ -36,7 +36,10 @@ use crate::contracts::{
     MAIN_CONTRACT,
 };
 
+mod check_utxo_exists_and_is_claimable;
 mod decode_wtx;
+mod inner_add_contract_transfer_outcome;
+mod inner_create_contract_transfer_outcome;
 mod inner_register_pegin;
 mod inner_register_pegin_utxo;
 mod parse_and_store_wtx;

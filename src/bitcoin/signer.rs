@@ -53,6 +53,16 @@ impl BitcoinOpSigner {
         }
     }
 
+    /// Make a copy of this signer.
+    /// Only used for testing (for safety)
+    #[cfg(test)]
+    pub fn dup(&self) -> Self {
+        BitcoinOpSigner {
+            secret_key: self.secret_key.clone(),
+            is_disposed: false
+        }
+    }
+
     /// Create a secret key from some state.
     /// Returns the bytes that can be fed into Secp256k1PrivateKey
     pub fn make_secret_key_from_bytes(seed: &[u8]) -> Secp256k1PrivateKey {

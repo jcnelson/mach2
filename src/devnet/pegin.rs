@@ -89,8 +89,20 @@ impl PeginTest {
             .collect()
     }
 
-    pub fn pegin(&self) -> &OpPegIn {
+    pub fn get_user_pubkey(&mut self) -> Secp256k1PublicKey {
+        self.user_signer.get_public_key()
+    }
+
+    pub fn get_user_signer(&mut self) -> &mut BitcoinOpSigner {
+        &mut self.user_signer
+    }
+
+    pub fn op(&self) -> &OpPegIn {
         &self.pegin
+    }
+    
+    pub fn op_mut(&mut self) -> &mut OpPegIn {
+        &mut self.pegin
     }
 
     pub fn begin(self, locktime: u32, safety_margin: u32, provider: StacksAddress, amount: u64, tx_fee: u64) -> Self {
@@ -181,8 +193,6 @@ impl PeginTest {
         for i in 0..pegin_tx.input.len() {
             pegin.check_signatures(&pegin_tx, i).unwrap_or_else(|e| panic!("Failed to check signature on input {i}: {e:?}"));
         }
-
-        pegin.clear_witness();
 
         self.pegin = pegin;
         self.pegin_tx = pegin_tx;

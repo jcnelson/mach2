@@ -57,11 +57,11 @@ clarity_test!(test_clarity_decode_bitcoin_wtx, {
         version: u1,
         segwit-marker: u0,
         segwit-version: u1,
-        txid: 0x40b390e3bf0ec432407ba5260266c51629fc9de9de7b0908728059309d69ee92,
+        txid: (reverse-buff32 0x40b390e3bf0ec432407ba5260266c51629fc9de9de7b0908728059309d69ee92),
         ins: (list
             {
                 outpoint: {
-                    hash: 0x83a0461c1a6c77e85168184093b51ee9fb0b34d44b2d03404ddef5a0dae9630d,
+                    hash: (reverse-buff32 0x83a0461c1a6c77e85168184093b51ee9fb0b34d44b2d03404ddef5a0dae9630d),
                     index: u3
                 },
                 scriptSig: 0x,
@@ -73,7 +73,7 @@ clarity_test!(test_clarity_decode_bitcoin_wtx, {
             }
             {
                 outpoint: {
-                    hash: 0xdfedc03ac764c2818e4afa5b878966edc12b1b3ae90bea56c16a2cba0666c65f,
+                    hash: (reverse-buff32 0xdfedc03ac764c2818e4afa5b878966edc12b1b3ae90bea56c16a2cba0666c65f),
                     index: u0
                 },
                 scriptSig: 0x,
@@ -97,7 +97,7 @@ clarity_test!(test_clarity_decode_bitcoin_wtx, {
         locktime: u0,
         signature-hash: {
             hash-outputs-locktime-sighash: 0x28c60842cef906988c38e1cf702e43dfd6f6a085ca0b07ef54b6e62ebcc680590000000001000000,
-            version-hash-prevouts-hash-sequence: 0x01000000186577930ce4fea61419a638e8cdaaf60b180c92e52dc20ea89ff52984c21ddf957879fdce4d8ab885e32ff307d54e75884da52522cc53d3c4fdb60edb69a098
+            version-hash-prevouts-hash-sequence: 0x01000000bf40edd0f85f1c5eb3a16004ab4a394244977699fa0daff770cb2de54b53c689957879fdce4d8ab885e32ff307d54e75884da52522cc53d3c4fdb60edb69a098
         }
     })
 })

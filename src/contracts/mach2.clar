@@ -39,15 +39,34 @@
 (define-constant ERR_TX_UTXO_WRONG_USER_PUBKEY u33)
 (define-constant ERR_NO_SUCH_TX u34)
 (define-constant ERR_MULTIPLE_PROVIDERS u35)
+(define-constant ERR_SIG_BAD_LENGTH u36)
+(define-constant ERR_SIG_BAD_PREFIX u37)
+(define-constant ERR_SIG_BAD_PAYLOAD_LENGTH u38)
+(define-constant ERR_SIG_BAD_R_PREFIX u39)
+(define-constant ERR_SIG_BAD_R_LENGTH u40)
+(define-constant ERR_SIG_BAD_R u41)
+(define-constant ERR_SIG_BAD_S_PREFIX u42)
+(define-constant ERR_SIG_BAD_S_LENGTH u43)
+(define-constant ERR_SIG_BAD_S u44)
+(define-constant ERR_SIG_UNEXPECTED_SIGHASH u45)
+(define-constant ERR_SIG_HIGH_S u46)
+(define-constant ERR_SIG_INVALID_PAYLOAD_LENGTH u47)
+(define-constant ERR_SIG_VERIFY_FAILED u48)
+(define-constant ERR_SIG_KEY_ALREADY_USED u49)
+(define-constant ERR_SIG_MALFORMED u50) 
+(define-constant ERR_SIG_R_IS_ZERO u51)
+(define-constant ERR_SIG_S_IS_ZERO u52)
+(define-constant ERR_SIG_R_IS_NEGATIVE u53)
+(define-constant ERR_SIG_S_IS_NEGATIVE u54)
+(define-constant ERR_SIG_R_HAS_NULLS u55)
+(define-constant ERR_SIG_S_HAS_NULLS u56)
+
+(define-constant HIGH_S 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0)
 
 (define-constant BTC_ERROR_BASE u1000)
 
 (define-constant SINGLESIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x16 0x1a))
 (define-constant MULTISIG_ADDRESS_VERSION_BYTE (if is-in-mainnet 0x14 0x15))
-
-;; type of redemption DAG tx
-(define-constant DAG_TX_PEGIN u1)
-(define-constant DAG_TX_CONTRACT_TRANSFER u2)
 
 ;; Registry of cosigners.
 ;; Maps the cosigner's Stacks principal to its list of signing keys
@@ -115,7 +134,7 @@
     (buff 32)
     (buff 32))
 
-;; All DAG UTXOs, keyed by outpoint.
+;; All off-chain UTXOs, keyed by outpoint.
 ;; Deleted when spent.
 (define-map utxos
     { txid: (buff 32), vout: uint }
@@ -128,20 +147,6 @@
         witness-script: (buff 1376), 
     })
 
-;; All processed peg-ins and transfers.
-;; Indexed by other maps.
-(define-map redemption-dag
-    ;; Little-endian wtxid, the reverse of what you see on explorers.
-    ;; For contract transfers, this is the wtxid of the user-signed but *not*
-    ;; cosigner-signed transaction.
-    (buff 32)
-    {
-        ;; type of transaction -- peg-in or contract-transfer
-        tx-type: uint,
-        ;; BTC provider of this transaction's BTC.
-        provider: principal
-    })
-
 ;; Materialized view of scBTC provider state
 (define-map btc-providers
     ;; Stacks principal identified in the witness script of the peg-in (i.e. from its marker payload).
@@ -149,7 +154,7 @@
     principal
     ;; info
     {
-        ;; pointer to the peg-in transaction info, stored in redemption-dag
+        ;; pointer to the peg-in transaction info
         wtxid: (buff 32),
         ;; when this provider's BTC expires
         expires: uint
@@ -164,9 +169,10 @@
         (utxo (unwrap! (map-get? utxos utxo-ptr)
             (err ERR_TX_NO_UTXO)))
     )
-    (asserts! (< (get expires utxo) cur-btc-height)
+    (asserts! (> (get expires utxo) cur-btc-height)
         (err ERR_BTC_EXPIRED))
     (ok utxo)))
+
 
 ;; Materialized view of scBTC balances
 (define-map balances
@@ -274,53 +280,170 @@
 
 ;; Iterator to search a list of keys to find if it produced the given signature over the given message.
 ;; If found, update `ctx` to have `found = true`.
-;; If a signature is invalid, update `ctx` to have `valid = false`.
-;; As long as `ctx`'s `valid` is true, then `i` will increment on each call in the iteration (so `i` points to the found key).
+;; Otherwise, increment `i` in `ctx` and keep going
 (define-private (check-pubkey-on-sig-iter
     (pubkey (buff 33))
-    (ctx { sig: (buff 65), signature-hash: (buff 32), found: bool, valid: bool, i: uint }))
+    (ctx { sig: (buff 65), signature-hash: (buff 32), found: bool, i: uint }))
 
-    (if (or (not (get valid ctx)) (get found ctx))
+    (if (get found ctx)
         ctx
-        (match (secp256k1-recover? (get signature-hash ctx) (get sig ctx))
-            ok-pubkey
-            (let (
-                (found (is-eq ok-pubkey pubkey))
-            )
-            (if found
-                (merge ctx { found: found })
-                (merge ctx { i: (+ u1 (get i ctx)) })))
-            err-code (merge ctx { valid: false }))))
+        (if (secp256k1-verify (get signature-hash ctx) (get sig ctx) pubkey)
+            (merge ctx { found: true })
+            (merge ctx { i: (+ u1 (get i ctx)) }))))
+
+;; Convert a DER-encoded signature and sighash into a 65-byte rsv.
+;; The final byte (the v) is always set to 0x00, since we only use this for the purposes of verification
+;; (not public key recovery).  Hence the suffix `-to-rs`.
+;; The sighash byte will be compared to the given `expected-sighash` if it is set to (some ..)
+;; Returns (ok (buff 65)) on success
+;; Returns (err ..) on decode failure
+(define-private (decode-sig-der-to-rs (sig (buff 73)) (expected-sighash (optional (buff 1))))
+    (let (
+        ;; checks derived from BIP66
+        (has-right-len (try! (if (>= (len sig) u9)
+            (ok true)
+            (err ERR_SIG_BAD_LENGTH))))
+
+        (starts-with-0x30 (try! (if (is-eq (element-at? sig u0) (some 0x30))
+            (ok true)
+            (err ERR_SIG_BAD_PREFIX))))
+
+        (payload-length (try! (match (element-at? sig u1)
+            length (ok (buff-to-uint-le length))
+            (err ERR_SIG_BAD_PAYLOAD_LENGTH))))
+
+        (payload-length-is-valid (try! (if (is-eq (len sig) (+ u3 payload-length))
+            (ok true)
+            (err ERR_SIG_INVALID_PAYLOAD_LENGTH))))
+        
+        (r-length (try! (match (element-at? sig u3)
+            length (ok (buff-to-uint-le length))
+            (err ERR_SIG_BAD_R_LENGTH))))
+
+        (s-length (try! (match (element-at? sig (+ u5 r-length))
+            length (ok (buff-to-uint-le length))
+            (err ERR_SIG_BAD_S_LENGTH))))
+
+        (payload-contains-s (try! (if (is-eq (len sig) (+ u7 r-length s-length))
+            (ok true)
+            (err ERR_SIG_INVALID_PAYLOAD_LENGTH))))
+
+        (r-starts-with-0x02 (try! (if (is-eq (element-at? sig u2) (some 0x02))
+            (ok true)
+            (err ERR_SIG_BAD_R_PREFIX))))
+
+        (r-length-is-valid (try! (if (> r-length u0)
+            (ok true)
+            (err ERR_SIG_R_IS_ZERO))))
+
+        (r-is-positive (try! (if (< (unwrap-panic (element-at? sig u4)) 0x80)
+            (ok true)
+            (err ERR_SIG_R_IS_NEGATIVE))))
+
+        (r-has-valid-null-prefix
+            (try! (if
+                (and (> r-length u1)
+                     (is-eq (element-at? sig u4) (some 0x00))
+                     (< (unwrap-panic (element-at? sig u5)) 0x80))
+                (err ERR_SIG_R_HAS_NULLS)
+                (ok true))))
+
+        (r-val-full (try! (match (slice? sig u4 (+ u4 r-length))
+            r (ok r)
+            (err ERR_SIG_BAD_R))))
+
+        (s-starts-with-0x02 (try! (if (is-eq (element-at? sig (+ u4 r-length)) (some 0x02))
+            (ok true)
+            (err ERR_SIG_BAD_S_PREFIX))))
+        
+        (s-length-is-valid (try! (if (> s-length u0)
+            (ok true)
+            (err ERR_SIG_S_IS_ZERO))))
+
+        (s-is-positive (try! (if (<= (unwrap-panic (element-at? sig (+ u6 r-length))) 0x80)
+            (ok true)
+            (err ERR_SIG_S_IS_NEGATIVE))))
+
+        (s-has-valid-null-refix
+            (try! (if
+                (and (> s-length u1)
+                     (is-eq (element-at? sig (+ u6 r-length)) (some 0x00))
+                     (< (unwrap-panic (element-at? sig (+ u7 r-length))) 0x80))
+                (err ERR_SIG_S_HAS_NULLS)
+                (ok true))))
+
+        (s-val-full (try! (match (slice? sig (+ u6 r-length) (+ u6 r-length s-length))
+            s (ok s)
+            (err ERR_SIG_BAD_S))))
+
+        ;; trim the single leading zero, if present
+        ;; (happens if the value is negative)
+        (r-val (if (is-eq (element-at? r-val-full u0) (some 0x00))
+            (unwrap-panic (slice? r-val-full u1 (len r-val-full)))
+            r-val-full))
+        
+        (s-val (if (is-eq (element-at? s-val-full u0) (some 0x00))
+            (unwrap-panic (slice? s-val-full u1 (len s-val-full)))
+            s-val-full))
+
+        (s-is-low (try! (if (<= s-val HIGH_S)
+            (ok true)
+            (err ERR_SIG_HIGH_S))))
+
+        (valid-sighash (try! (match expected-sighash
+            sighash
+                (if (is-eq (element-at? sig (- (len sig) u1)) (some sighash))
+                    (ok true)
+                    (err ERR_SIG_UNEXPECTED_SIGHASH))
+            (ok true))))
+
+        (can-make-65-byte-buff (try! (if (<= (+ (len r-val) (len s-val) u1) u65)
+            (ok true)
+            (err ERR_SIG_MALFORMED))))
+    )
+    (ok (unwrap-panic (as-max-len? (concat r-val (concat s-val 0x00)) u65)))))
 
 
 ;; Check a signature against a script hash, as part of verifying that a given key signed a given transaction segwit signature hash.
 ;; Each signature must be 65 bytes, even though the given `witness-sig` allows up to 1376. This is because `witness-sig` is a 
 ;; witness stack item.
 (define-private (check-sig-iter
-    (witness-sig (buff 1376))
-    (ctx { keys: (list 10 (buff 33)), used: (list 10 bool), signature-hash: (buff 32), valid: bool }))
+    (witness-sig-long (buff 1376))
+    (ctx { keys: (list 10 (buff 33)), used: (list 10 bool), signature-hash: (buff 32), result: (response bool uint) }))
     
-    (if (not (get valid ctx))
+    (if (is-err (get result ctx))
         ;; already failed
         ctx
 
         ;; maybe still valid
-        (let (
-            (result (fold check-pubkey-on-sig-iter
-                (get keys ctx)
-                { sig: (unwrap-panic (as-max-len? witness-sig u65)), signature-hash: (get signature-hash ctx), found: false, valid: true, i: u0 }))
-        )
-        (if (or (not (get found result)) (not (get valid result)))
-            ;; failed
-            (merge ctx { valid: false })
-            ;; succeeded, as long as it's not already used
-            (begin
-                (if (unwrap-panic (element-at? (get used ctx) (get i result)))
-                    ;; already used
-                    (merge ctx { valid: false })
-                    ;; not used yet
-                    (merge ctx { used: (unwrap-panic (replace-at? (get used ctx) (get i result) true)) })))))))
+        (match (as-max-len? witness-sig-long u73)
+            ;; well-formed signature
+            witness-sig
+                (match (decode-sig-der-to-rs witness-sig none)
+                    ;; decoded DER signature to compact
+                    sig-rs
+                        (let (
+                            (result (fold check-pubkey-on-sig-iter
+                                (get keys ctx)
+                                { sig: sig-rs, signature-hash: (get signature-hash ctx), found: false, i: u0 }))
+                        )
+                        (if (not (get found result))
+                            ;; failed
+                            (merge ctx { result: (err ERR_SIG_VERIFY_FAILED) })
+                            ;; succeeded, as long as it's not already used
+                            (begin
+                                (if (unwrap-panic (element-at? (get used ctx) (get i result)))
+                                    ;; already used
+                                    (merge ctx { result: (err ERR_SIG_KEY_ALREADY_USED) })
+                                    ;; not used yet
+                                    (merge ctx { used: (unwrap-panic (replace-at? (get used ctx) (get i result) true)) })))))
 
+                    ;; did not decode DER signature
+                    err-rs
+                        (merge ctx { result: (err err-rs) }))
+
+        ;; malformed signature
+        (merge ctx { result: (err ERR_SIG_MALFORMED) }))))
 
 ;; Check that a list of witness stack items is a well-formed signature
 (define-read-only (check-wellformed-witness-sig-iter
@@ -329,7 +452,7 @@
 
     (if (not valid)
         valid
-        (and valid (is-eq (len witness-sig) u65))))
+        (and valid (>= (len witness-sig) u65) (<= (len witness-sig) u72))))
 
 
 ;; Is a witness stack well-formed?
@@ -344,8 +467,8 @@
     ;; 0.   0x00
     ;; 1-N. cosigner witness signatures
     ;; N.   user signature
-    (if (>= (len witness) u4)
-        (if (is-eq (unwrap-panic (element-at? witness u0)) 0x00)
+    (if (>= (len witness) u3)
+        (if (is-eq (unwrap-panic (element-at? witness u0)) 0x)
             (if (fold check-wellformed-witness-sig-iter (unwrap-panic (slice? witness u1 (- (len witness) u1))) true)
                 (ok true)
                 (err ERR_TX_MALFORMED_WITNESS))
@@ -357,7 +480,7 @@
 ;; Pass an empty list for `cosigner-dag-keys` to only check the user signature.
 ;; Returns (ok true) on success
 ;; Returns (err ..) on signature verification falure, or if the witness was malformed
-(define-read-only (check-signatures
+(define-private (check-signatures
     (witness (list 13 (buff 1376)))
     (segwit-sighash (buff 32))
     (user-pubkey (buff 33))
@@ -366,21 +489,23 @@
     (let ( 
         (witness-valid (try! (is-witness-stack-wellformed? witness)))
 
-        (witness-script (unwrap-panic (element-at witness (- u1 (len witness)))))
-        (cosigner-witness-sigs (unwrap-panic (slice? witness u1 (- u2 (len witness)))))
-        (user-witness-sig (unwrap-panic (element-at? witness (- u1 (len witness)))))
+        (witness-script (unwrap-panic (element-at? witness (- (len witness) u1))))
+        (user-witness-sig (unwrap-panic (element-at? witness (- (len witness) u2))))
+        (cosigner-witness-sigs (if (> (len witness) u3)
+            (unwrap-panic (slice? witness u1 (- (len witness) u2)))
+            (list )))
         
         ;; cosigner signature check
         ;; (no-op if `cosigner-dag-keys` length is 0)
         (cosigner-dag-sig-check
-            (if (> (len cosigner-dag-keys) u0)
-                (get valid (fold check-sig-iter cosigner-witness-sigs {
+            (try! (if (> (len cosigner-dag-keys) u0)
+                (get result (fold check-sig-iter cosigner-witness-sigs {
                     keys: cosigner-dag-keys,
                     used: (list false false false false false false false false false false),
                     signature-hash: segwit-sighash,
-                    valid: true
+                    result: (ok true)
                 }))
-                true))
+                (ok true))))
 
         ;; bail early if the cosigner signature is invalid
         (cosigner-sig-valid (try!
@@ -389,28 +514,23 @@
                 (err ERR_TX_INVALID_COSIGNER_SIGNATURE))))
 
         ;; user signature check
-        (user-sig-check (check-sig-iter user-witness-sig {
+        (user-sig-check (try! (get result (check-sig-iter user-witness-sig {
             keys: (list user-pubkey),
             used: (list false),
             signature-hash: segwit-sighash,
-            valid: true
-        }))
+            result: (ok true)
+        }))))
     )
-
-    ;; the user signature is valid
-    (asserts! (get valid user-sig-check)
-        (err ERR_TX_INVALID_USER_SIGNATURE))
-
     (ok true)))
 
 
 ;; Authenticate a particular txin
 ;; * The input has to have a corresponding UTXO in the `utxos` map
 ;; * The input's witness script must exist and must match the UTXO's computed witness script
-;; * The cosigner must have signed it with its DAG transfer keys
+;; * The cosigner must have signed it with its transfer keys
 ;; * The given user key must have signed each input
 ;; * The UTXO must have the given provider 
-(define-read-only (inner-check-consumed-utxo
+(define-private (inner-check-consumed-utxo
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -460,12 +580,12 @@
                 (err ERR_TX_UTXO_WRONG_USER))))
 
         ;; make sure witness is at least the right length
-        (witness (try! (if (>= (len (get witness in)) u4)
+        (witness (try! (if (>= (len (get witness in)) u3)
             (ok (get witness in))
             (err ERR_TX_NO_WITNESS_DATA))))
 
         ;; final witness item (witness script)
-        (witness-script (unwrap-panic (element-at witness (- u1 (len witness)))))
+        (witness-script (unwrap-panic (element-at? witness (- (len witness) u1))))
 
         ;; bail early if the witness script doesn't match the UTXO
         (witness-script-valid (try!
@@ -493,10 +613,10 @@
     (ok (merge utxo { pointer: utxo-pointer }))))
 
 
-;; Check that a given input in txdata has been signed by the cosigner DAG keys and the user key
+;; Check that a given input in txdata has been signed by the cosigner keys and the user key
 ;; obtained from the input's corresponding UTXO.  Check also that the input is well-formed -- i.e.
 ;; its witness script matches the UTXO's scriptPubKey, and its witness stack is well-formed, etc.
-(define-read-only (check-consumed-utxo
+(define-private (check-consumed-utxo
     (input-index uint)
     (txdata {
         ins: (list 16 {
@@ -598,8 +718,13 @@
                     cur-btc-height: cur-btc-height
                 }))
     )
+    (try! (if (get valid checked-utxos)
+        (ok true)
+        (err ERR_TX_UTXO_CHECK_FAILED)))
+
     (asserts! (get valid checked-utxos)
         (err ERR_TX_UTXO_CHECK_FAILED))
+
     (ok (get utxos checked-utxos))))
 
 ;; Sum spend amounts for a list of UTXOs
@@ -816,12 +941,19 @@
     })
     (witness (list 13 (buff 1376))))
 
+    (let (
+        (outpoint (get outpoint inp))
+        (outpoint-le {
+            hash: (reverse-buff32 (get hash outpoint)),
+            index: (get index outpoint)
+        })
+    )
     {
-        outpoint: (get outpoint inp),
+        outpoint: outpoint-le,
         scriptSig: (get scriptSig inp),
         sequence: (get sequence inp),
         witness: witness
-    })
+    }))
 
 
 ;; Decode a Bitcoin tx and its witness data.
@@ -842,7 +974,7 @@
                 version: (get version decoded-tx),
                 segwit-marker: (get segwit-marker decoded-tx),
                 segwit-version: (get segwit-version decoded-tx),
-                txid: (unwrap-panic (get txid decoded-tx)),
+                txid: (reverse-buff32 (unwrap-panic (get txid decoded-tx))),
                 ins: ins,
                 outs: (get outs decoded-tx),
                 locktime: (get locktime decoded-tx),
@@ -910,7 +1042,6 @@
 
 
 ;; Authenticate and store an on-chain segwit transaction for a peg-in.
-;; Anyone can call this, but only cosigner-approved transactions will be added to the DAG.
 ;;
 ;; Returns (ok (buff 32)) on success, containing the wtxid
 ;; Returns (err uint) on failure, and sets last-btc-decode-error if the error was due to a decoding failure

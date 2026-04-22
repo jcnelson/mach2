@@ -178,7 +178,7 @@ impl TransactionExtensions for Transaction {
         let outs = Self::outputs_to_clarity(self);
         let locktime = format!("{}", &self.lock_time);
 
-        let precompute_code = format!(r#"(precompute-segwit-signature-hash u{version} {ins} {outs} u{locktime})"#);
+        let precompute_code = format!("(precompute-segwit-signature-hash\n    u{version}\n    {ins}\n    {outs}\n    u{locktime})");
 
         let precomputed_hashes_value = execute_in_segwit_contract(mainnet, &precompute_code)
             .map_err(|e| Error::EvalFailed(format!("Failed to execute segwit sighash precompute code '{precompute_code}': {e:?}")))?
@@ -191,14 +191,13 @@ impl TransactionExtensions for Transaction {
         let hash_outputs_locktime_sighash = to_hex(&hash_outputs_locktime_sighash);
 
         let spend_script_hex = to_hex(&spender_script.as_bytes());
-        let segwit_sighash_code = format!(r#"
-            (segwit-signature-hash
-            {ins}
-            {outs}
-             {{ version-hash-prevouts-hash-sequence: 0x{version_hash_prevouts_hash_sequence}, hash-outputs-locktime-sighash: 0x{hash_outputs_locktime_sighash} }}
-             u{i}
-             0x{spend_script_hex}
-             u{amount})"#);
+        let segwit_sighash_code = format!("(segwit-signature-hash
+    {ins}
+    {outs}
+    {{ version-hash-prevouts-hash-sequence: 0x{version_hash_prevouts_hash_sequence}, hash-outputs-locktime-sighash: 0x{hash_outputs_locktime_sighash} }}
+    u{i}
+    0x{spend_script_hex}
+    u{amount})");
         
         let segwit_signature_hash_value = execute_in_segwit_contract(mainnet, &segwit_sighash_code)
             .map_err(|e| Error::EvalFailed(format!("Failed to execute segwit sighash code '{segwit_sighash_code}': {e:?}")))?
@@ -221,6 +220,8 @@ impl TransactionExtensions for Transaction {
         if cfg!(test) {
             let rust_sighash = self.segwit_signature_hash(i, spender_script, amount, 0x01);
             m2_debug!("clarity sighash = {}, Rust sighash = {}", &to_hex(&sighash.0), &to_hex(&rust_sighash.0));
+            m2_debug!("segwit_sighash_code = \n{}", &segwit_sighash_code);
+            m2_debug!("precompute_code = \n{}", &precompute_code);
             assert_eq!(rust_sighash, sighash, "{}", segwit_sighash_code);
         }
 

@@ -143,7 +143,7 @@ fn test_send_pegin_tx_and_joint_spend() {
     // user signs
     assert!(pegin.sign_user(&mut user_signer, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("user-signed pegin spend: {}", &pegin_spend.display());
-    
+   
     // cosigner signs
     assert!(pegin.sign_cosigner(&mut cosigner_signer_1, &mut pegin_utxoset, &mut pegin_spend).is_ok());
     eprintln!("cosigner1-signed pegin spend: {}", &pegin_spend.display());

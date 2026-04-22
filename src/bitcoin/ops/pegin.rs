@@ -142,7 +142,7 @@ impl OpPegIn {
 
         let witness = format!("(list {})", witness_list.join(" "));
         let cosigner_dag_keys = format!("(list {})", &cosigner_dag_keys_list.join(" "));
-        let program = format!("(check-signatures {witness} {sighash} {user_pubkey} {cosigner_dag_keys})");
+        let program = format!("(check-signatures\n    {witness}\n    {sighash}\n    {user_pubkey}\n    {cosigner_dag_keys})");
         let result_value = execute_in_scbtc_contract(self.mainnet, &program)
             .map_err(|e| Error::EvalFailed(format!("Failed to run Clarity program '{program}': {e:?}")))?
             .ok_or_else(|| Error::EvalFailed(format!("Clarity program did not complete: '{program}'")))?;
@@ -151,6 +151,10 @@ impl OpPegIn {
             .expect_result()
             .map_err(|e| Error::WrongType(format!("Did not get ersponse from '{program}': {e:?}")))
             .map_err(|e| Error::WrongType(format!("Did not get (ok true) from '{program}': got (err {e:?})")))?;
+
+        if cfg!(test) {
+            m2_debug!("check_signatures program =\n{}", &program);
+        }
 
         Ok(())
     }
@@ -293,16 +297,21 @@ impl OpPegIn {
     }
    
     /// Create an unsigned peg-in spending transaction.  This transaction, when fully signed, would
-    /// spend a set of pegin UTXOs and UTXOs for the user's public key.
+    /// spend a set of pegin UTXOs and optionally UTXOs for the user's public key.
+    ///
+    /// **IMPORTANT**:  If you are creating an off-chain transaction, it must **ONLY** spend peg-in
+    /// UTXOs.  This is to ensure that every off-chain transaction is always spendable.
+    /// You should only consume additional UTXOs if you're clawing back.
     ///
     /// UTXOs in `utxo_set` will be spent to cover the fee.  Only p2wpkh UTXOs for the user's
-    /// public key will be considered.  Leave empty if you intend to pay the tx fee with the pegin.
+    /// public key will be considered.  Leave empty if you intend to pay the tx fee with the pegin
+    /// (which is mandatory in the "happy path")
     ///
     /// UTXOs in `pegin_utxos` are pegin UTXOs will be spent if they have p2wsh scriptPubKeys that
     /// commit to this OpPegIn's witness script.
     ///
     /// Returns Ok((tx, consumed_utxos)) on success
-    /// Returns Err(..) on error, and leaves `utxos_set` unchanged.
+    /// Returns Err(..) on error
     pub fn make_unsigned_pegin_spend_transaction(
         &self,
         tx_fee: u64,
@@ -317,7 +326,6 @@ impl OpPegIn {
         public_key.set_compressed(true);
 
         // select UTXOs until we have enough to cover the cost.
-        // This reduces `utxos_set` to only the UTXOs which will be spent.
         let mut total_consumed = 0;
         let mut consumed_utxos = vec![];
         for pegin_utxo in pegin_utxos.iter() {
@@ -329,15 +337,17 @@ impl OpPegIn {
             consumed_utxos.push(pegin_utxo.clone());
         }
 
-        for utxo in utxos_set.utxos.iter() {
-            if utxo.script_pub_key != user_p2wpkh {
-                continue;
-            }
-            total_consumed += utxo.amount;
-            consumed_utxos.push(utxo.clone());
+        if total_consumed < tx_fee {
+            for utxo in utxos_set.utxos.iter() {
+                if utxo.script_pub_key != user_p2wpkh {
+                    continue;
+                }
+                total_consumed += utxo.amount;
+                consumed_utxos.push(utxo.clone());
 
-            if total_consumed >= tx_fee {
-                break;
+                if total_consumed >= tx_fee {
+                    break;
+                }
             }
         }
 

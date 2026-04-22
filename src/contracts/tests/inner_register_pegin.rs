@@ -25,6 +25,14 @@ clarity_test!(test_clarity_store_wtx_and_register_pegin, {
 
 (define-constant WTXID (sha256 (sha256 WTX)))
 
+(define-constant WTX_2 0x01000000000102bc30d6a9265950a308c85924ac492ea3005763a6e7aa48bf8da7b87d304398cd0300000000fdffffff4905957cfed60e3e6a41ad3792fa916e501360153ec8711757f03084cc0583410000000000fdffffff0200f2052a01000000220020d20c2b12e7b42e0ce3b7334db8e76faeafabef54802cfb3d410a319a74331adfad6df8290100000016001492654bb92c6ead4303d85b8f5cb915ce019b24730247304402200725ee3cfed59aec6969be05ae3ab27cf7857d09f7e6eb7a917ebd78db4db04702203bbc79e842c28e637700192dbbdde2eacc83d77c6831e5a00879efda3b437efa012103deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f02483045022100cd02867da13ddc55630eb3417921095adf0bf57cafe41a2a5a5a33f34440a19002200cd979e3b24cee8e12cfc453bdae9b723a3fe05e4468b50fcb413d8b8efa43bd012103deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f00000000)
+
+(define-constant WTXID_2 (sha256 (sha256 WTX_2)))
+
+(define-constant WTX_3 0x01000000000102ed3611d35459595dcec666275a0172cf55a74b8d1e275ccf306c5bc31bfa2de40300000000fdffffff7e6c2a03eedb630cb441621e0d44c71529e22c336e103931583be02d4ef444b70000000000fdffffff0200f2052a01000000220020d20c2b12e7b42e0ce3b7334db8e76faeafabef54802cfb3d410a319a74331adf77b6f6290100000016001492654bb92c6ead4303d85b8f5cb915ce019b247302483045022100d74367b084db9ff019a2645357da738eb97867981a9893e6f664189725855667022072848329462a6f5ae89ae5e866ccf1b401cbb0138c05b660262cc499d0aa183f012103deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f0247304402206ec02ee575db4ca295b2a967addff8eb412ff2d1a1ab0ccd016d2ffeaf949e3002207fd4a954992239cb969fae80561a9902209c8ea272d65ae641834b7050a40633012103deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f00000000)
+
+(define-constant WTXID_3 (sha256 (sha256 WTX_3)))
+
 (define-constant COSIGNER_ADDR 'ST2D7JNTKA11T11QYCXEQPJQ97TETW7MKKWPJT770)
 (define-constant COSIGNER_KEYS (list
     0x03fe11e4e59b6c3c2a5a5760df9d4a903f7b478a146fc2947a9f04518419fa6387
@@ -60,7 +68,7 @@ clarity_test!(test_clarity_store_wtx_and_register_pegin, {
     })
 
 (define-data-var test-vector-index (list 256 uint)
-    (list u0))
+    (list u0 u1 u2))
 
 (map-insert test-vectors u0
     {
@@ -92,6 +100,68 @@ clarity_test!(test_clarity_store_wtx_and_register_pegin, {
         expected-result: (ok WTXID)
     })
 
+;; fails since the provider tried to register two separate pegins
+(map-insert test-vectors u1
+    {
+         cosigner: COSIGNER_ADDR,
+         tx: WTX_2,
+         block-header: 0x00000020a9ca3abf4873f451086c46edb1d858779ebe68b3ff2356b81ad2b345ff3d1f134d21c600f6bb130a459adf730f014f713cd6eb69a072ebc7d9d76fd4294bad93f980e669ffff7f2001000000,
+         block-height: u128,
+         block-hash: 0x4db45473fc972db5396b8e19b30bdc2b1c9219ed6b6fe55407fb5470ee8ecaa3,
+         tx-index: u2,
+         tree-depth: u2,
+         tx-proof: (list
+             (reverse-buff32 0xc0f4f7b505bcf07850ee6f90b6c2e94382dc4efb6d9523cd293b76899ff4107d)
+             (reverse-buff32 0x8508ca7e73d8a703b731ca50192e59b473fbe842302624a0c2cc5bea2f652da1)
+         ),
+         witness-merkle-root: (reverse-buff32 0x9b2b8ff9f8da742fa7492af8db61947adc221541835c49b09afffff7140472cb),
+         witness-reserved: 0x0000000000000000000000000000000000000000000000000000000000000000,
+         coinbase-tx: 0x02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0402800000ffffffff0261e1062a01000000160014916f8c456f282ec7c14d40de0a7ff5af74abc1950000000000000000266a24aa21a9ed9f84ae3d82946ecafd69185cf8afb0df0f32714103ee6e91c849b0f91a3beb2800000000,
+         coinbase-tx-proof: (list
+             (reverse-buff32 0xcd9843307db8a78dbf48aae7a6635700a32e49ac2459c808a3505926a9d630bc)
+             (reverse-buff32 0x1081ef4845611f4d35b754e1f16fdb0bed6b5880392d9c0ab217f11203a76c51)
+         ),
+         pegin-output: u0,
+         witness-data: {
+            recipient-principal: 'ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD,
+            user-pubkey: 0x03deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f,
+            locktime: u1000,
+            safety-margin: u30
+        },
+        expected-result: (err ERR_PROVIDER_EXISTS)
+    })
+
+;; fails since the provider tried to register two separate pegins
+(map-insert test-vectors u2
+    {
+         cosigner: COSIGNER_ADDR,
+         tx: WTX_3,
+         block-header: 0x000000205c652d410b2da0e6eadcc6c13e5ab69273215815f186a10e390b57583371f42664ce0ced9afc34f5924904cba6636675a5c3ca6641cde589f7a008a5eae656803ce2e669ffff7f2002000000,
+         block-height: u128,
+         block-hash: 0x558ee0bc164b19e355a0edfcf908093568b9945749d7cf3d13306a8740e948da,
+         tx-index: u2,
+         tree-depth: u2,
+         tx-proof: (list
+            (reverse-buff32 0xf40d861f86b259341179e31397e6893a7457bab112f5c51c658dfd5ca4077c8a)
+            (reverse-buff32 0x44c46f5dfb1cf6255bb8d0c555182988b661f57fef7c9131f4acdd7b2246a08c)
+         ),
+         witness-merkle-root: (reverse-buff32 0x031061c621206ca2689e0d5f2ab25fded92ef78d2429e34e107e7429fe948882),
+         witness-reserved: 0x0000000000000000000000000000000000000000000000000000000000000000,
+         coinbase-tx: 0x02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0402800000ffffffff0278d8062a01000000160014916f8c456f282ec7c14d40de0a7ff5af74abc1950000000000000000266a24aa21a9ed8297586974e07e80866cf2eb8be64df40c07af3441f98f13e3f1adb363c18bb500000000,
+         coinbase-tx-proof: (list
+            (reverse-buff32 0xe42dfa1bc35b6c30cf5c271e8d4ba755cf72015a2766c6ce5d595954d31136ed)
+            (reverse-buff32 0x5db6388a77d8d173655988a74ef490b2cd8c49816aa4e0eea2af964a245ea5af)
+         ),
+         pegin-output: u0,
+         witness-data: {
+            recipient-principal: 'ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD,
+            user-pubkey: 0x03deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f,
+            locktime: u1000,
+            safety-margin: u30
+        },
+        expected-result: (err ERR_PROVIDER_EXISTS)
+    })
+
 (define-private (run-test (test-id uint) (test-result (response bool uint)))
     (if (is-err test-result)
         test-result
@@ -117,6 +187,9 @@ clarity_test!(test_clarity_store_wtx_and_register_pegin, {
             (pegin-output (get pegin-output test-vector))
             (witness-data (get witness-data test-vector))
 
+            ;; mock the bitcoin header
+            (mocked-header (unwrap-panic (contract-call? .bitcoin mock-add-burnchain-block-header-hash btc-block-height btc-block-hash)))
+
             (precheck (match (get expected-result test-vector)
                 ok-wtxid
                 (begin
@@ -131,12 +204,6 @@ clarity_test!(test_clarity_store_wtx_and_register_pegin, {
                         (begin
                             (test-fail! (concat "Already have wtxid mapping for test vector #" (int-to-ascii test-id)))
                             (err u2)))
-
-                    ;; mock the bitcoin header
-                    (asserts! (is-ok (contract-call? .bitcoin mock-add-burnchain-block-header-hash btc-block-height btc-block-hash))
-                        (begin
-                            (test-fail! (concat "Failed to mock bitcoin block header hash for test vector #" (int-to-ascii test-id)))
-                            (err u10)))
 
                     ;; check that .bitcoin's get-bc-h-hash works correctly when mocked
                     (asserts! (is-eq (contract-call? .bitcoin get-bc-h-hash btc-block-height) (some btc-block-hash))

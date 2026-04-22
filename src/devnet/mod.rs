@@ -42,11 +42,13 @@ use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 use stacks_common::util::{get_epoch_time_secs, sleep_ms};
 use stacks_common::types::chainstate::StacksAddress;
 use stacks_common::util::hash::to_hex;
+use stacks_common::deps_common::bitcoin::network::serialize::serialize as btc_serialize;
+use crate::stacks_common::deps_common::bitcoin::network::serialize::BitcoinHash;
 
 use crate::bitcoin::Txid;
 use crate::bitcoin::rpc::BitcoinRpcClient;
 use crate::bitcoin::signer::BitcoinOpSigner;
-use crate::bitcoin::wallet::BitcoinClient;
+use crate::bitcoin::wallet::{BitcoinClient, UTXOSet};
 
 use crate::core::Config;
 
@@ -1139,15 +1141,134 @@ fn test_devnet_make_pegin_test_vector() {
     
     let btc_key = Secp256k1PrivateKey::from_hex(&MINING_KEY).unwrap();
     let btc_pub = Secp256k1PublicKey::from_private(&btc_key);
-    let _client = devnet.bootup(btc_pub).unwrap();
+    let client = devnet.bootup(btc_pub).unwrap();
 
+    let locktime = 1000;
+    let safety_margin = 30;
     let mut pegin_test = PeginTest::new(btc_key, vec![0x02], 3, &devnet.config)
-        .begin(1000, 30, StacksAddress::from_string("ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD").unwrap(), 50 * 100_000_000, 40000);
+        .begin(locktime, safety_margin, StacksAddress::from_string("ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD").unwrap(), 50 * 100_000_000, 40000);
 
     m2_info!("cosigner_pubkeys: {:?}", &pegin_test.get_cosigner_pubkeys().into_iter().map(|pubk| pubk.to_hex()).collect::<Vec<_>>());
-    m2_info!("witness script: {}", to_hex(&pegin_test.pegin().make_witness_script().unwrap().into_bytes()));
+    m2_info!("witness script: {}", to_hex(&pegin_test.op().make_witness_script().unwrap().into_bytes()));
     m2_info!("decoded transaction: {:?}", &pegin_test.tx());
-    m2_info!("raw transaction: {}", &to_hex(&pegin_test.tx_bytes()));
-    m2_info!("proof-of-inclusion: {}", serde_json::to_string(pegin_test.proof.as_ref().unwrap()).unwrap());
+
+    let raw_tx = to_hex(&pegin_test.tx_bytes());
+    m2_info!("raw transaction: {}", &raw_tx);
+   
+    let proof = pegin_test.proof.clone().unwrap();
+    let block_header = to_hex(&btc_serialize(&proof.block_header).unwrap());
+    let block_height = proof.block_height;
+    let block_hash = to_hex(&proof.block_header.bitcoin_hash().0);
+    let tx_index = proof.tx_index;
+    let tree_depth = proof.tree_depth;
+    let tx_proof = proof.tx_proof
+        .iter()
+        .map(|h| format!("(reverse-buff32 0x{})", h.to_hex()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let witness_merkle_root = proof.witness_merkle_root.to_hex();
+    let witness_reserved = proof.witness_reserved.to_hex();
+    let coinbase_tx = to_hex(&btc_serialize(&proof.coinbase_tx).unwrap());
+    let coinbase_tx_proof = proof.coinbase_tx_proof
+        .iter()
+        .map(|h| format!("(reverse-buff32 0x{})", h.to_hex()))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let pegin_utxos = pegin_test.op().get_pegin_utxos(pegin_test.tx(), 1).unwrap();
+    let user_p2wpkh = pegin_test.op().user_p2wpkh();
+
+    let empty_utxos = UTXOSet::empty();
+
+    pegin_test.op_mut().clear_witness();
+
+    let (mut pegin_spend_tx, mut pegin_spend_utxoset) = pegin_test
+        .op()
+        .make_unsigned_pegin_spend_transaction(1000, &empty_utxos, &pegin_utxos, user_p2wpkh)
+        .expect("Failed to create joint spend transaction");
+
+    pegin_spend_tx.lock_time = 500;
+
+    // user signs
+    let mut user_signer = pegin_test.get_user_signer().dup();
+    assert!(pegin_test.op_mut().sign_user(&mut user_signer, &mut pegin_spend_utxoset, &mut pegin_spend_tx).is_ok());
+
+    let partially_signed_user_tx = to_hex(&btc_serialize(&pegin_spend_tx).unwrap());
+
+    m2_info!("user-signed off-chain transaction: {}", &partially_signed_user_tx);
+
+    m2_info!("
+(define-constant WTX 0x{raw_tx})
+
+(define-constant PARTIALLY_SIGNED_OUTCOME_WTX 0x{partially_signed_user_tx})
+
+(define-constant WTXID (sha256 (sha256 WTX)))
+
+(define-constant COSIGNER_ADDR 'ST2D7JNTKA11T11QYCXEQPJQ97TETW7MKKWPJT770)
+(define-constant COSIGNER_KEYS (list
+    0x03fe11e4e59b6c3c2a5a5760df9d4a903f7b478a146fc2947a9f04518419fa6387
+    0x031c3141781be53e2abee5d0a64b15bb6e5decceb10e8c519b146d8e4effd5621a
+    0x03fc17d6b3fb08855ff1bdefd68fa8fa9a5b4b9708fcad2c72cde4371088aaceea
+))
+
+;; register the cosigner for this pegin
+(asserts! (is-ok (inner-register-cosigner COSIGNER_ADDR COSIGNER_KEYS))
+    (begin
+        (test-fail! \"Failed to register cosigner\")
+        (err u1234567890)))
+
+(define-constant OWNER 'ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD)
+(define-constant USER_PUBKEY 0x03deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f)
+(define-constant PROVIDER (unwrap-panic (principal-construct? SINGLESIG_ADDRESS_VERSION_BYTE (hash160 USER_PUBKEY))))
+
+;; carry out this pegin
+(let (
+    (pegin {{
+        cosigner: COSIGNER_ADDR,
+        tx: WTX,
+        block-header: (reverse-buff32 0x{block_header}),
+        block-height: u{block_height},
+        block-hash: 0x{block_hash},
+        tx-index: u{tx_index},
+        tree-depth: u{tree_depth},
+        tx-proof: (list {tx_proof}),
+        witness-merkle-root: (reverse-buff32 0x{witness_merkle_root}),
+        witness-reserved: 0x{witness_reserved},
+        coinbase-tx: 0x{coinbase_tx},
+        coinbase-tx-proof: (list {coinbase_tx_proof}),
+        pegin-output: u0,
+        witness-data: {{
+            recipient-principal: OWNER,
+            user-pubkey: USER_PUBKEY,
+            locktime: u{locktime},
+            safety-margin: u{safety_margin}
+        }}
+    }})
+)
+(asserts! (is-ok (contract-call? .bitcoin mock-add-burnchain-block-header-hash (get block-height pegin) (get block-hash pegin)))
+    (begin
+        (test-fail! \"Failed to mock bitcoin block header hash\")
+        (err u11111)))
+
+(asserts! (is-ok (inner-register-pegin
+        (get cosigner pegin)
+        (get tx pegin)
+        (get block-header pegin)
+        (get block-height pegin)
+        (get tx-index pegin)
+        (get tree-depth pegin)
+        (get tx-proof pegin)
+        (get witness-merkle-root pegin)
+        (get witness-reserved pegin)
+        (get coinbase-tx pegin)
+        (get coinbase-tx-proof pegin)
+        (get pegin-output pegin)
+        (get witness-data pegin)))
+    (begin
+        (test-fail! \"Failed to peg in\")
+        (err u22222)))
+)
+"
+    ); 
 }
 

@@ -14,7 +14,7 @@
 (define-constant ERR_PSBT_HAS_BAD_WITNESS u309)
 (define-constant ERR_WRONG_SIGNATURE_COUNT u310)
 (define-constant ERR_NO_SUCH_WTXID u311)
-(define-constant ERR_UTXO_SPENT_OR_EXPIRED u312)
+(define-constant ERR_UTXO_RESERVED_OR_EXPIRED u312)
 
 ;; Map contract transfer outcome ID to list of transactions.
 ;; Each transaction can spend up to 256 UTXOs, as long as:
@@ -30,7 +30,8 @@
         provider: principal,
         owner: principal,
         user-pubkey: (buff 33),
-        closed: bool
+        closed: bool,
+        voided: bool,
     })
 
 
@@ -104,7 +105,7 @@
 ;; Check that a UTXO can be claimed:
 ;; * it must exist
 ;; * it must not be expired
-;; * it must not be reserved (or if it is reserved, it is expired)
+;; * it must not be reserved by anyone else (or if it is reserved, it is expired or already reserved by us)
 ;; * they must all have the same provider
 ;; * they must all have the same owner
 ;; * they must all have the same user public key
@@ -126,9 +127,14 @@
         ;; maybe available. check reservation
         (if (match (map-get? contract-reserved-utxos utxo-ptr)
             reservation
-                ;; it can either be already used by the caller (i.e. we're adding a new outcome), or can be expired
-                (or (is-eq (get outcome-id reservation) (get outcome-id ctx))
-                    (is-none (map-get? contract-transfer-outcomes (get outcome-id reservation))))
+                ;; utxo is reserved by an existing outcome.
+                ;; we can only spend it if its reservation is voided.
+                (match (map-get? contract-transfer-outcomes (get outcome-id reservation))
+                    existing-outcome
+                        (get voided existing-outcome)
+
+                    ;; should be unreachable, but defensively return an error
+                    false)
             true)
 
             ;; UTXO is unreserved
@@ -176,7 +182,7 @@
                     (merge ctx { result: (err err-utxo) }))
 
             ;; UTXO is already taken or spent
-            (merge ctx { result: (err ERR_UTXO_SPENT_OR_EXPIRED) }))))
+            (merge ctx { result: (err ERR_UTXO_RESERVED_OR_EXPIRED) }))))
 
 
 ;; Reserve UTXOs for a particular outcome.
@@ -202,7 +208,7 @@
 
 
 ;; Set up a group of mutually-exclusive contract-transfer transactions.
-;; At most one of this group can be co-signed and added to the DAG.
+;; At most one of this group can be co-signed.
 (define-private (inner-create-contract-transfer-outcome
     (owner principal)
     (user-pubkey (buff 33))
@@ -239,7 +245,8 @@
             provider: provider,
             owner: owner,
             user-pubkey: user-pubkey,
-            closed: false
+            closed: false,
+            voided: false,
         })
         (err ERR_TRANSFER_OUTCOME_EXISTS))
 
@@ -277,7 +284,7 @@
 
     (match (map-get? contract-reserved-utxos ptr)
         reservation
-            (if (< (get expires reservation) cur-btc-height)
+            (if (>= (get expires reservation) cur-btc-height)
                 (some reservation)
                 none)
         none))
@@ -361,16 +368,21 @@
     (if (and
         ;; still possibly good
         (is-ok resp)
-        ;; witness has two items
-        (is-eq (len (get witness inp)) u2)
-        ;; first item is user signature
-        (is-eq (len (unwrap-panic (element-at? (get witness inp) u0))) u65))
+        ;; witness has three items
+        (is-eq (len (get witness inp)) u3)
+        ;; first item is empty
+        (is-eq (len (unwrap-panic (element-at? (get witness inp) u0))) u0)
+        ;; second item is user signature and a sighash byte
+        (and
+            (>= (len (unwrap-panic (element-at? (get witness inp) u1))) u65)
+            (<= (len (unwrap-panic (element-at? (get witness inp) u1))) u72)))
 
         ;; well-formed!
         resp
 
         ;; not well-formed!
         (err ERR_PSBT_HAS_BAD_WITNESS)))
+
 
 ;; Add a contract-transfer transaction to an existing outcome group.
 ;; This is a partially-signed Bitcoin transaction, signed by the user.
@@ -413,8 +425,8 @@
                 result: (ok true)
             }))))
 
-        ;; each witness vector in each input must have exactly two items:
-        ;; the user signature (65 bytes), and the witness script.
+        ;; each witness vector in each input must have exactly three items:
+        ;; the empty element, the user signature (65 bytes), and the witness script.
         (inputs-well-formed (try!
             (fold check-txin-has-wellformed-witness (get ins decoded-tx) (ok true))))
 
@@ -433,10 +445,10 @@
         (total-consumed (fold sum-utxo-spend-iter consumed-utxos u0))
 
         ;; check that each consumed UTXO is reserved for this outcome and is unexpired
-        (try! (get result
+        (all-reserved-and-unexpired (try! (get result
             (fold check-consumed-utxo-spends-reserved-utxo-iter
                 consumed-utxos
-                { cur-btc-height: cur-btc-height, outcome-id: outcome-id, result: (ok true) })))
+                { cur-btc-height: cur-btc-height, outcome-id: outcome-id, result: (ok true) }))))
     )
 
     ;; transaction spends at most total-consumed
