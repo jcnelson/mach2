@@ -416,6 +416,8 @@ impl OpPegIn {
     /// for the user public key), or they can be previous peg-in transactions.
     /// Typically, `utxos_set` is the value returned from
     /// `make_unsigned_pegin_spend_transaction()`.
+    ///
+    /// Returns the list of produced DER-encoded signatures (with sighash byte), in txin order
     fn sign_pegin_spend_transaction(
         &mut self,
         signer: &mut BitcoinOpSigner,
@@ -423,7 +425,7 @@ impl OpPegIn {
         tx: &mut Transaction,
         is_cosigner: bool,
         null_cosigner: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<Vec<u8>>, Error> {
         let mut public_key = signer.get_public_key();
         public_key.set_compressed(true);
        
@@ -434,6 +436,8 @@ impl OpPegIn {
         let user_p2wpkh = self.user_p2wpkh();
         let pegin_p2wsh = self.p2wsh_pegin_script_pubkey()?;
         let witness_script = self.make_witness_script()?;
+
+        let mut sigs = vec![];
 
         for (i, utxo) in utxos_set.utxos.iter().enumerate() {
             let sig_hash_all = 0x01;
@@ -461,7 +465,7 @@ impl OpPegIn {
                 }
             };
 
-            let sig1_der = {
+            let sig_der = {
                 let message = signer
                     .sign_message(sig_hash.as_bytes())?;
                 message
@@ -470,15 +474,16 @@ impl OpPegIn {
                     .to_standard()
                     .serialize_der()
             };
+            let sig_sighash_all = [&*sig_der, &[sig_hash_all as u8]][..].concat().to_vec();
 
             let mut signed_pegin = false;
 
             if !is_cosigner && utxo.script_pub_key == user_p2wpkh && self.is_user_signer(signer) {
                 // spending on-chain p2wpkh UTXO from user (i.e. which pays a tx fee)
-                m2_debug!("User {} signs: {:?}", &public_key.to_hex(), &sig1_der);
+                m2_debug!("User {} signs: {:?}", &public_key.to_hex(), &sig_sighash_all);
                 tx.input[i].script_sig = Script::from(vec![]);
                 tx.input[i].witness = vec![
-                    [&*sig1_der, &[sig_hash_all as u8][..]].concat().to_vec(),
+                    sig_sighash_all.clone(),
                     public_key.to_bytes(),
                 ];
             }
@@ -502,16 +507,16 @@ impl OpPegIn {
                     else {
                         // cosigner spends
                         // leading witness stack items are the cosigner threshold
-                        m2_debug!("Cosigner {} signs: {:?}", &public_key.to_hex(), &sig1_der);
-                        self.cosigner_signature_witness.push([&*sig1_der, &[sig_hash_all as u8]][..].concat().to_vec());
+                        m2_debug!("Cosigner {} signs: {:?}", &public_key.to_hex(), &sig_sighash_all);
+                        self.cosigner_signature_witness.push(sig_sighash_all.clone());
                     }
                     signed_pegin = true;
                 }
                 else {
                     // user spends
                     // must be the second-to-last item on the stack before the program
-                    m2_debug!("User {} signs: {:?}", &public_key.to_hex(), &sig1_der);
-                    self.user_signature_witness = [&*sig1_der, &[sig_hash_all as u8][..]].concat().to_vec();
+                    m2_debug!("User {} signs: {:?}", &public_key.to_hex(), &sig_sighash_all);
+                    self.user_signature_witness = sig_sighash_all.clone();
                     signed_pegin = true;
                 }
             }
@@ -535,18 +540,21 @@ impl OpPegIn {
 
             // save sighash
             self.signature_hashes.insert(i, sig_hash);
+
+            sigs.push(sig_sighash_all);
         }
-        Ok(())
+        Ok(sigs)
     }
 
     /// sign the transaction for the user.
     /// The given `utxos_set` must be the same `utxos_set` used to produce the transaction.
+    /// Returns the list of user-produced DER-encoded signatures with trailing sighash byte.
     pub fn sign_user(
         &mut self,
         user_signer: &mut BitcoinOpSigner,
         utxos_set: &mut UTXOSet,
         tx: &mut Transaction
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<Vec<u8>>, Error> {
         if !self.is_user_signer(user_signer) {
             m2_warn!("sign_user: invalid signer");
             return Err(Error::WrongSigner);
@@ -556,12 +564,13 @@ impl OpPegIn {
     
     /// sign the transaction for the cosigner.
     /// The given `utxos_set` must be the same `utxos_set` used to produce the transaction.
+    /// Returns the list of cosigner-produced DER-encoded signatures with trailing sighash byte.
     pub fn sign_cosigner(
         &mut self,
         cosigner_signer: &mut BitcoinOpSigner,
         utxos_set: &UTXOSet,
         tx: &mut Transaction
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<Vec<u8>>, Error> {
         self.sign_pegin_spend_transaction(cosigner_signer, utxos_set, tx, true, false)
     }
     
@@ -574,6 +583,7 @@ impl OpPegIn {
         tx: &mut Transaction
     ) -> Result<(), Error> {
         self.sign_pegin_spend_transaction(noop_signer, utxos_set, tx, true, true)
+            .and_then(|_null_sigs| Ok(()))
     }
 
     /// Get the pegin p2wsh UTXOs from a transaction, if any exist

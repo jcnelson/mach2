@@ -1145,10 +1145,14 @@ fn test_devnet_make_pegin_test_vector() {
 
     let locktime = 1000;
     let safety_margin = 30;
+    let owner = StacksAddress::from_string("ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD").unwrap();
     let mut pegin_test = PeginTest::new(btc_key, vec![0x02], 3, &devnet.config)
-        .begin(locktime, safety_margin, StacksAddress::from_string("ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD").unwrap(), 50 * 100_000_000, 40000);
+        .begin(locktime, safety_margin, owner.clone(), 50 * 100_000_000, 40000);
 
-    m2_info!("cosigner_pubkeys: {:?}", &pegin_test.get_cosigner_pubkeys().into_iter().map(|pubk| pubk.to_hex()).collect::<Vec<_>>());
+    let cosigner_pubkeys_hex = pegin_test.get_cosigner_pubkeys().into_iter().map(|pubk| pubk.to_hex()).collect::<Vec<_>>();
+    assert_eq!(cosigner_pubkeys_hex.len(), 3);
+
+    m2_info!("cosigner_pubkeys: {:?}", &cosigner_pubkeys_hex);
     m2_info!("witness script: {}", to_hex(&pegin_test.op().make_witness_script().unwrap().into_bytes()));
     m2_info!("decoded transaction: {:?}", &pegin_test.tx());
 
@@ -1194,6 +1198,52 @@ fn test_devnet_make_pegin_test_vector() {
     assert!(pegin_test.op_mut().sign_user(&mut user_signer, &mut pegin_spend_utxoset, &mut pegin_spend_tx).is_ok());
 
     let partially_signed_user_tx = to_hex(&btc_serialize(&pegin_spend_tx).unwrap());
+    
+    let user_pubkey_hex = user_signer.get_public_key().to_hex();
+    let owner_addr_str = owner.to_string();
+    let cosigner_addr = "ST2D7JNTKA11T11QYCXEQPJQ97TETW7MKKWPJT770";
+    let cosigner_key_0 = &cosigner_pubkeys_hex[0];
+    let cosigner_key_1 = &cosigner_pubkeys_hex[1];
+    let cosigner_key_2 = &cosigner_pubkeys_hex[2];
+
+    let mut cosigner_signers : Vec<_> = pegin_test
+        .get_cosigner_signers()
+        .iter()
+        .map(|signer| signer.dup())
+        .collect();
+
+    // have the cosigner produce signaturs for the partially-signed tx
+    let cosigner_sigs : Vec<Vec<String>> = cosigner_signers
+        .iter_mut()
+        .map(|cosigner_signer| {
+            let sigs = pegin_test.op_mut().sign_cosigner(cosigner_signer, &mut pegin_spend_utxoset, &mut pegin_spend_tx).unwrap();
+            sigs.into_iter().map(|sig| format!("0x{}", &to_hex(&sig))).collect::<Vec<_>>()
+        })
+        .collect();
+
+    assert_eq!(cosigner_sigs.len(), 3);
+    let mut cosigner_sig_lists = vec![];
+    for inp_idx in 0..pegin_spend_tx.input.len() {
+        cosigner_sig_lists.push(vec![]);
+    }
+
+    for cosigner_sig_bundle in cosigner_sigs.iter() {
+        assert_eq!(cosigner_sig_bundle.len(), pegin_spend_tx.input.len());
+        for inp_idx in 0..pegin_spend_tx.input.len() {
+            cosigner_sig_lists[inp_idx].push(format!("0x{}", &cosigner_sig_bundle[inp_idx]));
+        }
+    }
+
+    let cosigner_sigs_code : Vec<_> = cosigner_sig_lists
+        .iter()
+        .map(|sig_list| format!("(list {})", sig_list.join(" ")))
+        .collect();
+
+    let cosigner_sigs = format!("(list\n      {})", cosigner_sigs_code.join("   \n"));
+
+    let cosigner_sigs_0 = &cosigner_sig_lists[0];
+    let cosigner_sigs_1 = &cosigner_sig_lists[1];
+    let cosigner_sigs_2 = &cosigner_sig_lists[2];
 
     m2_info!("user-signed off-chain transaction: {}", &partially_signed_user_tx);
 
@@ -1204,12 +1254,15 @@ fn test_devnet_make_pegin_test_vector() {
 
 (define-constant WTXID (sha256 (sha256 WTX)))
 
-(define-constant COSIGNER_ADDR 'ST2D7JNTKA11T11QYCXEQPJQ97TETW7MKKWPJT770)
+(define-constant COSIGNER_ADDR '{cosigner_addr})
 (define-constant COSIGNER_KEYS (list
-    0x03fe11e4e59b6c3c2a5a5760df9d4a903f7b478a146fc2947a9f04518419fa6387
-    0x031c3141781be53e2abee5d0a64b15bb6e5decceb10e8c519b146d8e4effd5621a
-    0x03fc17d6b3fb08855ff1bdefd68fa8fa9a5b4b9708fcad2c72cde4371088aaceea
+    0x{cosigner_key_0}
+    0x{cosigner_key_1}
+    0x{cosigner_key_2}
 ))
+
+(define-constant COSIGNER_SIGS
+    {cosigner_sigs})
 
 ;; register the cosigner for this pegin
 (asserts! (is-ok (inner-register-cosigner COSIGNER_ADDR COSIGNER_KEYS))
@@ -1217,18 +1270,18 @@ fn test_devnet_make_pegin_test_vector() {
         (test-fail! \"Failed to register cosigner\")
         (err u1234567890)))
 
-(define-constant OWNER 'ST3KHDCRH3V1N41J822M4NRN2XDJSAK5GK9CFYZWD)
-(define-constant USER_PUBKEY 0x03deef1f0aa19e1a91c960cb0007be1ebe1309017ddfca7996b89a81ed31c4393f)
-(define-constant PROVIDER (unwrap-panic (principal-construct? SINGLESIG_ADDRESS_VERSION_BYTE (hash160 USER_PUBKEY))))
+(define-constant OWNER '{owner_addr_str})
+(define-constant USER_PUBKEY 0x{user_pubkey_hex})
+(define-constant PROVIDER (unwrap-panic (principal-construct? SINGLESIG_ADDRESS_VERSION_BYTE (hash160 MOCK_USER_PUBKEY))))
 
 ;; carry out this pegin
 (let (
     (pegin {{
         cosigner: COSIGNER_ADDR,
         tx: WTX,
-        block-header: (reverse-buff32 0x{block_header}),
+        block-header: 0x{block_header},
         block-height: u{block_height},
-        block-hash: 0x{block_hash},
+        block-hash: (reverse-buff32 0x{block_hash}),
         tx-index: u{tx_index},
         tree-depth: u{tree_depth},
         tx-proof: (list {tx_proof}),
@@ -1267,6 +1320,37 @@ fn test_devnet_make_pegin_test_vector() {
     (begin
         (test-fail! \"Failed to peg in\")
         (err u22222)))
+)
+
+;; create an outcome for this pegin transaction's pegin UTXO
+(asserts! (is-ok (inner-create-contract-transfer-outcome
+        OWNER
+        USER_PUBKEY
+        {{ contract: .mach2, id: u0 }}
+        (list {{ txid: (unwrap-panic (map-get? wtxid-to-txid WTXID)), vout: u0 }})
+        u128))
+    (begin
+        (test-fail! \"Failed to create transfer outcome\")
+        (err u3333333)))
+
+;; add an outcome for this pegin transaction's pegin UTXO.
+;; This will be outcome #0
+(let (
+    (outcome {{
+        owner: OWNER,
+        outcome-id: {{ contract: .mach2, id: u0 }},
+        partially-signed-wtx: PARTIALLY_SIGNED_OUTCOME_WTX,
+        cur-btc-height: u200,
+    }})
+)
+(asserts! (is-ok (inner-add-contract-transfer-outcome
+        (get owner outcome)
+        (get outcome-id outcome)
+        (get partially-signed-wtx outcome)
+        (get cur-btc-height outcome)))
+    (begin
+        (test-fail! \"Failed to add a transfer outcome\")
+        (err u444444444)))
 )
 "
     ); 

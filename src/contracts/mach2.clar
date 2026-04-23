@@ -36,30 +36,30 @@
 (define-constant ERR_BTC_TOO_MANY_INPUTS u31)
 (define-constant ERR_BTC_MISMATCHED_WITNESSES u32)
 (define-constant ERR_TX_UTXO_WRONG_OWNER u33)
-(define-constant ERR_TX_UTXO_WRONG_USER_PUBKEY u33)
-(define-constant ERR_NO_SUCH_TX u34)
-(define-constant ERR_MULTIPLE_PROVIDERS u35)
-(define-constant ERR_SIG_BAD_LENGTH u36)
-(define-constant ERR_SIG_BAD_PREFIX u37)
-(define-constant ERR_SIG_BAD_PAYLOAD_LENGTH u38)
-(define-constant ERR_SIG_BAD_R_PREFIX u39)
-(define-constant ERR_SIG_BAD_R_LENGTH u40)
-(define-constant ERR_SIG_BAD_R u41)
-(define-constant ERR_SIG_BAD_S_PREFIX u42)
-(define-constant ERR_SIG_BAD_S_LENGTH u43)
-(define-constant ERR_SIG_BAD_S u44)
-(define-constant ERR_SIG_UNEXPECTED_SIGHASH u45)
-(define-constant ERR_SIG_HIGH_S u46)
-(define-constant ERR_SIG_INVALID_PAYLOAD_LENGTH u47)
-(define-constant ERR_SIG_VERIFY_FAILED u48)
-(define-constant ERR_SIG_KEY_ALREADY_USED u49)
-(define-constant ERR_SIG_MALFORMED u50) 
-(define-constant ERR_SIG_R_IS_ZERO u51)
-(define-constant ERR_SIG_S_IS_ZERO u52)
-(define-constant ERR_SIG_R_IS_NEGATIVE u53)
-(define-constant ERR_SIG_S_IS_NEGATIVE u54)
-(define-constant ERR_SIG_R_HAS_NULLS u55)
-(define-constant ERR_SIG_S_HAS_NULLS u56)
+(define-constant ERR_TX_UTXO_WRONG_USER_PUBKEY u34)
+(define-constant ERR_NO_SUCH_TX u35)
+(define-constant ERR_MULTIPLE_PROVIDERS u36)
+(define-constant ERR_SIG_BAD_LENGTH u37)
+(define-constant ERR_SIG_BAD_PREFIX u38)
+(define-constant ERR_SIG_BAD_PAYLOAD_LENGTH u39)
+(define-constant ERR_SIG_BAD_R_PREFIX u40)
+(define-constant ERR_SIG_BAD_R_LENGTH u41)
+(define-constant ERR_SIG_BAD_R u42)
+(define-constant ERR_SIG_BAD_S_PREFIX u43)
+(define-constant ERR_SIG_BAD_S_LENGTH u44)
+(define-constant ERR_SIG_BAD_S u45)
+(define-constant ERR_SIG_UNEXPECTED_SIGHASH u46)
+(define-constant ERR_SIG_HIGH_S u47)
+(define-constant ERR_SIG_INVALID_PAYLOAD_LENGTH u48)
+(define-constant ERR_SIG_VERIFY_FAILED u49)
+(define-constant ERR_SIG_KEY_ALREADY_USED u50)
+(define-constant ERR_SIG_MALFORMED u51) 
+(define-constant ERR_SIG_R_IS_ZERO u52)
+(define-constant ERR_SIG_S_IS_ZERO u53)
+(define-constant ERR_SIG_R_IS_NEGATIVE u54)
+(define-constant ERR_SIG_S_IS_NEGATIVE u55)
+(define-constant ERR_SIG_R_HAS_NULLS u56)
+(define-constant ERR_SIG_S_HAS_NULLS u57)
 
 (define-constant HIGH_S 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0)
 
@@ -243,7 +243,7 @@
     (inner-register-cosigner cosigner-addr dag-keys)))
 
 
-(define-read-only (balance-adder
+(define-private (balance-adder
     (balance-item { provider: principal, amount: uint, expires: uint })
     (ctx { btc-block-height: uint, sum: uint }))
 
@@ -446,7 +446,7 @@
         (merge ctx { result: (err ERR_SIG_MALFORMED) }))))
 
 ;; Check that a list of witness stack items is a well-formed signature
-(define-read-only (check-wellformed-witness-sig-iter
+(define-private (check-wellformed-witness-sig-iter
     (witness-sig (buff 1376))
     (valid bool))
 
@@ -460,7 +460,7 @@
 ;; The first item must be 0x.
 ;; The the second item, up to the last item, must be signatures (65-byte payloads).
 ;; The last item is the witness script itself.
-(define-read-only (is-witness-stack-wellformed?
+(define-private (is-witness-stack-wellformed?
     (witness (list 13 (buff 1376))))
 
     ;; witness stack:
@@ -506,12 +506,6 @@
                     result: (ok true)
                 }))
                 (ok true))))
-
-        ;; bail early if the cosigner signature is invalid
-        (cosigner-sig-valid (try!
-            (if cosigner-dag-sig-check
-                (ok true)
-                (err ERR_TX_INVALID_COSIGNER_SIGNATURE))))
 
         ;; user signature check
         (user-sig-check (try! (get result (check-sig-iter user-witness-sig {
@@ -722,9 +716,6 @@
         (ok true)
         (err ERR_TX_UTXO_CHECK_FAILED)))
 
-    (asserts! (get valid checked-utxos)
-        (err ERR_TX_UTXO_CHECK_FAILED))
-
     (ok (get utxos checked-utxos))))
 
 ;; Sum spend amounts for a list of UTXOs
@@ -757,7 +748,7 @@
 ;;
 ;; Returns (ok (list { balance-rec })) on success
 ;; Returns (err ERR_INSUFFICIENT_BALANCE) if (somehow) the UTXO exceeds the balance
-(define-read-only (deduct-provider-balance
+(define-private (deduct-provider-balance
     (owner principal)
     (provider principal)
     (amount uint)
@@ -774,7 +765,7 @@
                 (list )))
 
             (after (if (< provider-index (len user-balances))
-                (unwrap-panic (slice? user-balances (+ u1 provider-index) (len user-balances)))
+                (default-to (list ) (slice? user-balances (+ u1 provider-index) (len user-balances)))
                 (list )))
 
             (balance-rec (unwrap-panic (element-at? user-balances provider-index)))
@@ -899,7 +890,7 @@
 
 
 ;; from bitcoin.clar
-(define-read-only (reverse-buff32 (input (buff 32)))
+(define-private (reverse-buff32 (input (buff 32)))
    (unwrap-panic (as-max-len? (concat
    (reverse-buff16 (unwrap-panic (as-max-len? (unwrap-panic (slice? input u16 u32)) u16)))
    (reverse-buff16 (unwrap-panic (as-max-len? (unwrap-panic (slice? input u0 u16)) u16)))) u32)))
@@ -916,7 +907,7 @@
 ;; 6.       <locktime> OP_CLTV
 ;; 7.  OP_ENDIF
 ;; 
-(define-read-only (compute-pegin-witness-script
+(define-private (compute-pegin-witness-script
     (cosigner-addr principal)
     (witness-data {
         recipient-principal: principal,
@@ -1103,7 +1094,7 @@
 
 ;; Insert or update a new balance into a given recipient's balance vector.
 ;; Do not store it; return the balance vector instead so the caller can store it.
-(define-read-only (make-user-balance-vec
+(define-private (make-user-balance-vec
     (owner principal)
     (provider principal)
     (amount uint)

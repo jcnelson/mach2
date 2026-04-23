@@ -139,11 +139,23 @@ clarity_test!(test_clarity_inner_add_contract_transfer_outcome, {
     outcome-id: { contract: principal, id: uint },
     partially-signed-wtx: (buff 4096),
     cur-btc-height: uint,
-    expected-result: (response bool uint)
+    expected-result: (response uint uint)
 })
 
 (define-data-var test-vector-index (list 256 uint)
     (list u0))
+
+;; TODO: no such outcome
+;; TODO: not the owner
+;; TODO: can't register a PSBT twice
+;; TODO: can't store the same PSBT twice
+;; TODO: transaction can't spend an unreserved UTXO
+;; TODO: transaction can't spend an expired UTXO
+;; TODO: tried to spend UTXO that was not reserved for this outcome
+;; TODO: tried to spend a reserved UTXO that was expired
+;; TODO: check that inputs are well-formed
+;; TODO: test that check-consumed-utxos only flagged reserved, unexpired UTXOs for this outcome
+;; TODO: transaction tries to spend too much
 
 (map-insert test-vectors u0 
 {
@@ -151,7 +163,7 @@ clarity_test!(test_clarity_inner_add_contract_transfer_outcome, {
     outcome-id: { contract: .mach2, id: u0 },
     partially-signed-wtx: PARTIALLY_SIGNED_OUTCOME_WTX,
     cur-btc-height: u200,
-    expected-result: (ok true)
+    expected-result: (ok u0)
 })
     
 (define-private (run-test (test-id uint) (test-result (response bool uint)))
@@ -181,62 +193,68 @@ clarity_test!(test_clarity_inner_add_contract_transfer_outcome, {
                     (err u4444444)))))
 
         (decoded-ins (get ins decoded-tx))
-        (inp-0 (try! (match (element-at? decoded-ins u0)
-            ins (ok ins)
-            (begin
-                (test-fail! (concat "Did not get inputs for partially-signed wtx in test #" (int-to-ascii test-id)))
-                (err u444444445)))))
 
-        (check-inp-0 (try! (match (get result (check-spends-reserved-utxo-iter inp-0
-                { cur-btc-height: cur-btc-height, outcome-id: outcome-id, result: (ok true) }))
-            ok-res
-                (begin
-                    (print "Checked inp 0")
-                    (ok true))
-            err-res
-                (begin
-                    (test-fail! (concat "Did not check input #0 for test #" (int-to-ascii test-id)))
-                    (print (concat "got err " (int-to-ascii err-res)))
-                    (err u55555555)))))
-        
-        (check-inp-0-witness (try! (match (check-txin-has-wellformed-witness inp-0 (ok true))
-            ok-res
-                (begin
-                    (print "witness in inp 0 is well-formed")
-                    (ok true))
-            err-res
-                (begin
-                    (test-fail! (concat "Did not check input #0 witness for test #" (int-to-ascii test-id)))
-                    (print (concat "got err " (int-to-ascii err-res)))
-                    (print inp-0)
-                    (err u5555555556)))))
+        (test-0-checks (if (is-eq test-id u0)
+            (let (
+                (inp-0 (try! (match (element-at? decoded-ins u0)
+                    ins (ok ins)
+                    (begin
+                        (test-fail! (concat "Did not get inputs for partially-signed wtx in test #" (int-to-ascii test-id)))
+                        (err u444444445)))))
 
-        (decode-sig-result (try! (match (decode-sig-der-to-rs 0x3045022100cec8aa2f443a2159a225ef37d0f0940d344140a44f16868aedc475aa161050e9022073135db4b029bc59d1828628f5e88ad2ebae34153a25030ef0708a88dbae55d301 none)
-            ok-sig (begin
-                (print "decoded signature:")
-                (print ok-sig)
-                (asserts! (is-eq ok-sig 0xcec8aa2f443a2159a225ef37d0f0940d344140a44f16868aedc475aa161050e973135db4b029bc59d1828628f5e88ad2ebae34153a25030ef0708a88dbae55d300) (err u55555557))
-                (ok ok-sig))
-            err-code (begin
-                (print "decoded signature failure:")
-                (print err-code)
-                (err err-code)))))
+                (check-inp-0 (try! (match (get result (check-spends-reserved-utxo-iter inp-0
+                        { cur-btc-height: cur-btc-height, outcome-id: outcome-id, result: (ok true) }))
+                    ok-res
+                        (begin
+                            (print "Checked inp 0")
+                            (ok true))
+                    err-res
+                        (begin
+                            (test-fail! (concat "Did not check input #0 for test #" (int-to-ascii test-id)))
+                            (print (concat "got err " (int-to-ascii err-res)))
+                            (err u55555555)))))
+                
+                (check-inp-0-witness (try! (match (check-txin-has-wellformed-witness inp-0 (ok true))
+                    ok-res
+                        (begin
+                            (print "witness in inp 0 is well-formed")
+                            (ok true))
+                    err-res
+                        (begin
+                            (test-fail! (concat "Did not check input #0 witness for test #" (int-to-ascii test-id)))
+                            (print (concat "got err " (int-to-ascii err-res)))
+                            (print inp-0)
+                            (err u5555555556)))))
 
-        (check-user-sig (match (get result (check-sig-iter 0x3045022100cec8aa2f443a2159a225ef37d0f0940d344140a44f16868aedc475aa161050e9022073135db4b029bc59d1828628f5e88ad2ebae34153a25030ef0708a88dbae55d301 { keys: (list USER_PUBKEY), used: (list false), signature-hash: 0x4e10e5b08067dc38edcbdc1ffd1d1878084868220c4724caf0b01ec44adfc549, result: (ok true) }))
-            ok-res (begin
-                (print "signature valid for user sig")
-                (ok true))
-            err-val (begin
-                (print (concat "signature invalid for user sig: err " (int-to-ascii err-val)))
-                (err err-val))))
+                (decode-sig-result (try! (match (decode-sig-der-to-rs 0x3045022100cec8aa2f443a2159a225ef37d0f0940d344140a44f16868aedc475aa161050e9022073135db4b029bc59d1828628f5e88ad2ebae34153a25030ef0708a88dbae55d301 none)
+                    ok-sig (begin
+                        (print "decoded signature:")
+                        (print ok-sig)
+                        (asserts! (is-eq ok-sig 0xcec8aa2f443a2159a225ef37d0f0940d344140a44f16868aedc475aa161050e973135db4b029bc59d1828628f5e88ad2ebae34153a25030ef0708a88dbae55d300) (err u55555557))
+                        (ok ok-sig))
+                    err-code (begin
+                        (print "decoded signature failure:")
+                        (print err-code)
+                        (err err-code)))))
 
-        (found-key (try! (if (get found (check-pubkey-on-sig-iter USER_PUBKEY { sig: decode-sig-result, signature-hash: 0x4e10e5b08067dc38edcbdc1ffd1d1878084868220c4724caf0b01ec44adfc549, found: false, i: u0 }))
-            (begin
-                (print "verified signature!")
-                (ok true))
-            (begin
-                (print "failed to verify signature!")
-                (err u66666666666)))))
+                (check-user-sig (match (get result (check-sig-iter 0x3045022100cec8aa2f443a2159a225ef37d0f0940d344140a44f16868aedc475aa161050e9022073135db4b029bc59d1828628f5e88ad2ebae34153a25030ef0708a88dbae55d301 { keys: (list USER_PUBKEY), used: (list false), signature-hash: 0x4e10e5b08067dc38edcbdc1ffd1d1878084868220c4724caf0b01ec44adfc549, result: (ok true) }))
+                    ok-res (begin
+                        (print "signature valid for user sig")
+                        (ok true))
+                    err-val (begin
+                        (print (concat "signature invalid for user sig: err " (int-to-ascii err-val)))
+                        (err err-val))))
+
+                (found-key (try! (if (get found (check-pubkey-on-sig-iter USER_PUBKEY { sig: decode-sig-result, signature-hash: 0x4e10e5b08067dc38edcbdc1ffd1d1878084868220c4724caf0b01ec44adfc549, found: false, i: u0 }))
+                    (begin
+                        (print "verified signature!")
+                        (ok true))
+                    (begin
+                        (print "failed to verify signature!")
+                        (err u66666666666)))))
+            )
+            true)
+            false))
 
         (res (inner-add-contract-transfer-outcome
             owner

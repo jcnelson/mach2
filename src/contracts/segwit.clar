@@ -13,7 +13,7 @@
 
 ;; Convert a u16 to a little-endian (buff 2)
 ;; Upper bits are dropped.
-(define-read-only (uint16-to-buff-le (val uint))
+(define-private (uint16-to-buff-le (val uint))
     (let (
         (val-be (bit-or
             (bit-shift-left (bit-and val u255) u8)
@@ -23,7 +23,7 @@
 
 ;; Convert a u32 to a little-endian (buff 4)
 ;; Upper bits are dropped.
-(define-read-only (uint32-to-buff-le (val uint))
+(define-private (uint32-to-buff-le (val uint))
     (let (
         (val-be (bit-or
             (bit-shift-left (bit-and val u255) u24)
@@ -35,7 +35,7 @@
 
 ;; Convert a u64 to a little-endian (buff 8)
 ;; Upper bits are dropped.
-(define-read-only (uint64-to-buff-le (val uint))
+(define-private (uint64-to-buff-le (val uint))
     (let (
         (val-be (bit-or
             (bit-shift-left (bit-and val u255) u56)
@@ -66,7 +66,7 @@
         u4096)))
 
 ;; Compute a segwit tx hashPrevouts as part of computing a segwit signature hash.
-(define-read-only (segwit-prevouts-hash
+(define-private (segwit-prevouts-hash
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -83,7 +83,7 @@
         (sha256 (sha256 (fold segwit-prevouts-hash-iter ins 0x)))))
 
 ;; Compute the hash of sequence values for tx inputs as part of computing a segwit signature hash.
-(define-read-only (segwit-sequence-hash-iter
+(define-private (segwit-sequence-hash-iter
     (inp {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -98,7 +98,7 @@
         u4096)))
 
 ;; Compute a segwit tx hashSequence
-(define-read-only (segwit-sequence-hash
+(define-private (segwit-sequence-hash
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -116,7 +116,7 @@
         (sha256 (sha256 (fold segwit-sequence-hash-iter ins 0x)))))
 
 ;; Compute the varint-prefixed script
-(define-read-only (segwit-varint-prefixed-script (script (buff 1376)))
+(define-private (segwit-varint-prefixed-script (script (buff 1376)))
     ;; length -- 1-byte or 2-byte varint
     (concat
         (if (<= (len script) u252)
@@ -128,7 +128,7 @@
         script))
 
 ;; Compute the script bytes for a segwit witness script for the purposes of signature hash calculation.
-(define-read-only (segwit-script-bytes (script (buff 1376)))
+(define-private (segwit-script-bytes (script (buff 1376)))
     (if (and (is-eq (len script) u22) (is-eq (unwrap-panic (slice? script u0 u2)) 0x0014))
         ;; p2wpkh --> length-prefixed p2pkh
         (concat 0x1976a914 (concat
@@ -141,7 +141,7 @@
 
 ;; Compute the hashed output for a segwit tx out.
 ;; Assumes that the scriptPubKey is a p2wsh. Panics otherwise.
-(define-read-only (segwit-outputs-hash-iter
+(define-private (segwit-outputs-hash-iter
     (out {
         value: uint,
         scriptPubKey: (buff 1376)
@@ -155,7 +155,7 @@
         u4096)))
 
 ;; Get the hashed outputs for a segwit sighash
-(define-read-only (segwit-outputs-hash
+(define-private (segwit-outputs-hash
     (outs (list 50 {
         value: uint,
         scriptPubKey: (buff 1376),
@@ -176,7 +176,7 @@
 ;; * Only supports p2wsh outputs
 ;; * Does not support OP_CODESEPARATOR
 ;; * Only supports SIGHASH_ALL
-(define-read-only (segwit-signature-hash
+(define-private (segwit-signature-hash
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -230,7 +230,7 @@
         (get hash-outputs-locktime-sighash signature-hash)))))))))))
 
 ;; Pre-compute segwit signature hash data from a decoded transaction
-(define-read-only (precompute-segwit-signature-hash
+(define-private (precompute-segwit-signature-hash
     (version uint)
     (ins (list 16 {
         outpoint: { hash: (buff 32), index: uint },

@@ -36,7 +36,7 @@
 
 
 ;; Convert a value between 0 and 16 (inclusive) to its opcode
-(define-read-only (uint-to-op (val uint))
+(define-private (uint-to-op (val uint))
     (if (is-eq val u0)
         (some 0x00)
     (if (<= u16 val)
@@ -46,7 +46,7 @@
 
 ;; Create a multisig script out of keys for a cosigner.
 ;; It must have at least 2/3 threshold.
-(define-read-only (make-cosigner-multisig-script (keys (list 10 (buff 33))))
+(define-private (make-cosigner-multisig-script (keys (list 10 (buff 33))))
     (let (
         (threshold (if (< (len keys) u4)
             (len keys)
@@ -71,25 +71,25 @@
 
 ;; Convert a u24 to a big-endian (buff 3).
 ;; Upper bits are dropped
-(define-read-only (uint24-to-buff-be (val uint))
+(define-private (uint24-to-buff-be (val uint))
     (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u14 u17)) u3)))
 
 
 ;; Convert a u16 to a big-endian (buff 2).
 ;; Upper bits are dropped
-(define-read-only (uint16-to-buff-be (val uint))
+(define-private (uint16-to-buff-be (val uint))
     (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u15 u17)) u2)))
 
 
 ;; Convert an u8 into a (buff 1)
 ;; Upper bits are dropped
-(define-read-only (uint8-to-buff (val uint))
+(define-private (uint8-to-buff (val uint))
     (unwrap-panic (as-max-len? (unwrap-panic (slice? (unwrap-panic (to-consensus-buff? val)) u16 u17)) u1)))
 
 
 ;; Convert a uint to a CScriptNum -- an OP_PUSHDATA followed by its big-endian byte representation.
 ;; Only works for up to 4-byte numbers.
-(define-read-only (make-script-num (val uint))
+(define-private (make-script-num (val uint))
     (if (<= val u255)
         (some (concat 0x01 (uint8-to-buff val)))
     (if (<= val u65535)
@@ -102,7 +102,7 @@
 
 
 ;; Compute a PUSHDATA for a slice
-(define-read-only (op-push-slice (bytes (buff 1376)))
+(define-private (op-push-slice (bytes (buff 1376)))
     (if (< (len bytes) u75)
         (concat (uint8-to-buff (len bytes)) bytes)
     (if (< (len bytes) u255)
@@ -123,7 +123,7 @@
 ;; 6.       <locktime> OP_CLTV
 ;; 7.  OP_ENDIF
 ;; 
-(define-read-only (make-pegin-witness-script
+(define-private (make-pegin-witness-script
     (cosigner-dag-spend-script (buff 1376))
     (witness-data {
         recipient-principal: principal,

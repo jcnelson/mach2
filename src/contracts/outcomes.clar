@@ -15,6 +15,7 @@
 (define-constant ERR_WRONG_SIGNATURE_COUNT u310)
 (define-constant ERR_NO_SUCH_WTXID u311)
 (define-constant ERR_UTXO_RESERVED_OR_EXPIRED u312)
+(define-constant ERR_DUPLICATE_TRANSFER_OUTCOME u313)
 
 ;; Map contract transfer outcome ID to list of transactions.
 ;; Each transaction can spend up to 256 UTXOs, as long as:
@@ -49,7 +50,7 @@
 
 ;; Iterator to search through a list of utxo pointers to find UTXOs.
 ;; They must all have the same provider and must be unexpired.
-(define-read-only (get-utxos-for-tx-iter
+(define-private (get-utxos-for-tx-iter
     (vout uint)
     (ctx {
         txid: (buff 32),
@@ -81,7 +82,7 @@
 ;;
 ;; Returns (ok (list { txid: (buff 32), vout: uint })) on success
 ;; Returns (err uint) on failure
-(define-read-only (get-utxos-for-tx (wtxid (buff 32)) (cur-btc-height uint))
+(define-private (get-utxos-for-tx (wtxid (buff 32)) (cur-btc-height uint))
     (let (
         (txid (unwrap! (map-get? wtxid-to-txid wtxid) (err ERR_NO_SUCH_TX)))
         (found-utxos (fold get-utxos-for-tx-iter
@@ -109,7 +110,7 @@
 ;; * they must all have the same provider
 ;; * they must all have the same owner
 ;; * they must all have the same user public key
-(define-read-only (check-utxo-exists-and-is-claimable
+(define-private (check-utxo-exists-and-is-claimable
     (utxo-ptr { txid: (buff 32), vout: uint })
     (ctx {
         provider: (optional principal),
@@ -278,7 +279,7 @@
 
 ;; Get a UTXO reservation if it is unexpired.
 ;; Otherwise returns none.
-(define-read-only (get-unexpired-utxo-reservation
+(define-private (get-unexpired-utxo-reservation
     (ptr { txid: (buff 32), vout: uint })
     (cur-btc-height uint))
 
@@ -291,7 +292,7 @@
 
 
 ;; Check that a txin spends a reserved txout
-(define-read-only (check-spends-reserved-utxo-iter
+(define-private (check-spends-reserved-utxo-iter
     (inp {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -321,7 +322,7 @@
 
 ;; Check that a UTXO (augmented with its ptr) is reserved.
 ;; (i.e. check the output of `get-consumed-utxos` against reservations)
-(define-read-only (check-consumed-utxo-spends-reserved-utxo-iter
+(define-private (check-consumed-utxo-spends-reserved-utxo-iter
     (utxo {
         pointer: { txid: (buff 32), vout: uint },
         owner: principal,
@@ -356,7 +357,7 @@
 ;; Check and see if the witness of an PSBT input well-formed.
 ;; * It must have the user signature
 ;; * It must have the witness script
-(define-read-only (check-txin-has-wellformed-witness
+(define-private (check-txin-has-wellformed-witness
     (inp {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -387,6 +388,7 @@
 ;; Add a contract-transfer transaction to an existing outcome group.
 ;; This is a partially-signed Bitcoin transaction, signed by the user.
 ;; The cosigner will sign later.
+;; Returns (ok wtxid-index) on success, which can be fed into `complete-transfer-otucome` 
 (define-private (inner-add-contract-transfer-outcome
     (owner principal)
     (outcome-id { contract: principal, id: uint })
@@ -405,6 +407,11 @@
         ;; NOTE: This is the little-endian PSBT wtxid
         (partially-signed-wtxid (sha256 (sha256 partially-signed-wtx)))
         
+        ;; this WTXID is not already present in this listing
+        (is-novel-wtxid (try! (if (is-none (index-of? (get wtxids transfer-outcome) partially-signed-wtxid))
+            (ok true)
+            (err ERR_DUPLICATE_TRANSFER_OUTCOME))))
+
         ;; we must have space for the outcome
         (new-wtxids (unwrap! (as-max-len? (append (get wtxids transfer-outcome) partially-signed-wtxid) u1024)
             (err ERR_TOO_MANY_OUTCOMES)))
@@ -444,7 +451,8 @@
         ;; compute total UTXO spend
         (total-consumed (fold sum-utxo-spend-iter consumed-utxos u0))
 
-        ;; check that each consumed UTXO is reserved for this outcome and is unexpired
+        ;; defensive check:
+        ;; check that each *consumed* UTXO was reserved for this outcome and is unexpired
         (all-reserved-and-unexpired (try! (get result
             (fold check-consumed-utxo-spends-reserved-utxo-iter
                 consumed-utxos
@@ -460,7 +468,7 @@
 
     ;; store updated outcome
     (map-set contract-transfer-outcomes outcome-id (merge transfer-outcome { wtxids: new-wtxids })) 
-    (ok true)))
+    (ok (- (len new-wtxids) u1))))
 
 
 ;; Add a contract-transfer outcome to an existing outcome group.
@@ -478,8 +486,8 @@
 ;; The witness for each input currently has just the user signature and witness script.
 ;; Panics if cosiner-sigs and ins aren't the same length.
 ;; Panics if the witness is malformed (e.g. doesn't have two entries)
-(define-read-only (add-cosigner-sigs-to-txin
-    (cosigner-sig (list 10 (buff 65)))
+(define-private (add-cosigner-sigs-to-txin
+    (cosigner-sig (list 10 (buff 73)))
     (inp {
         outpoint: { hash: (buff 32), index: uint },
         scriptSig: (buff 1376),
@@ -488,9 +496,11 @@
     }))
 
     (let (
+        (witness (get witness inp))
+
         ;; current witness stack must have two items: user signature and witness script
-        (witness-user-sig (unwrap-panic (element-at (get witness inp) u0)))
-        (witness-script (unwrap-panic (element-at (get witness inp) u1)))
+        (witness-user-sig (unwrap-panic (element-at? witness (- (len witness) u2))))
+        (witness-script (unwrap-panic (element-at? witness (- (len witness) u1))))
 
         ;; cosigner signatures go at the top of the witness stack.
         ;; The first witness stack item is an empty item, due to how OP_CHECKMULTISIG works.
@@ -504,6 +514,7 @@
     )
     new-inp))
 
+
 ;; Complete a contract transfer.
 ;; `wtxid-index` refers to the wtxid in the idenified transfer outcome's `wtxids` list.
 ;; The corresponding `wtxid` corresponds to a partially-signed decoded tx.
@@ -514,7 +525,7 @@
     (cosigner-addr principal)
     (outcome-id { contract: principal, id: uint }) 
     (wtxid-index uint)
-    (cosigner-sigs (list 16 (list 10 (buff 65))))
+    (cosigner-sigs (list 16 (list 10 (buff 73))))
     (btc-block-height uint))
 
     (let (
@@ -562,7 +573,7 @@
     (cosigner-addr principal)
     (outcome-id { contract: principal, id: uint }) 
     (wtxid-index uint)
-    (cosigner-sigs (list 16 (list 10 (buff 65)))))
+    (cosigner-sigs (list 16 (list 10 (buff 73)))))
 
     (inner-complete-transfer
         cosigner-addr

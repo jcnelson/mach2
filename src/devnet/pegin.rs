@@ -96,6 +96,10 @@ impl PeginTest {
     pub fn get_user_signer(&mut self) -> &mut BitcoinOpSigner {
         &mut self.user_signer
     }
+    
+    pub fn get_cosigner_signers(&mut self) -> &mut [BitcoinOpSigner] {
+        &mut self.cosigner_signers
+    }
 
     pub fn op(&self) -> &OpPegIn {
         &self.pegin
